@@ -1,51 +1,72 @@
-# NiveSalers — Discord Tickets Bot & Cloud Persistence Service
+# 🚀 NiveSalers — Discord Bot em JavaScript
 
-Bot profissional de atendimento por tickets para Discord com servidor HTTP embutido e sistema de persistência em nuvem desenhado especialmente para hospedagem no **Render**.
-
----
-
-## 🚀 Novidades e Correções Implementadas
-
-1. **Servidor HTTP Embutido (Render Ready & Headless):**
-   - Escuta na porta `PORT` definida pelo Render (ou 3000 por padrão).
-   - Impede que o serviço seja derrubado por inatividade ou timeout no Render.
-   - Endpoint `/health` e `/ping` para monitoramento 24/7 sem painel web.
-
-2. **Sistema de Cloud Storage (Sem perda de dados em deploys):**
-   - No Render, o disco local é efêmero (reinicializações ou novos deploys apagam arquivos locais).
-   - O módulo `utils/cloudSync.js` sincroniza automaticamente todas as configurações de clientes (`dados/servidores/*.json`), tickets em aberto e keys de licença (`keys.json`) com o GitHub / nuvem.
-   - Ao iniciar no Render, o bot puxa instantaneamente o backup mais recente, garantindo que nenhum cliente que comprou acesso perca suas configurações.
-   - Sincronização periódica (a cada 10 minutos) e sincronização sob demanda com *debounce* a cada alteração de configuração.
-
-3. **Correções de Erros no Código Original:**
-   - **`utils/vercelDeploy.js`:** Corrigido erro de sintaxe com template literal truncado em `publicarTranscript`.
-   - **`utils/ticketManager.js`:** Adicionadas as importações faltantes de modais do Discord.js (`ModalBuilder`, `TextInputBuilder`, `TextInputStyle`).
-   - **`utils/database.js`:** Sincronizado com `utils/storage.js` e implementada a função `getPlano(id)` que estava ausente e causava exceções não tratadas no `utils/premiumVIP.js`.
-   - **`commands/key.js`:** Corrigida a validação de servidor. Agora clientes novos que executam `/key` têm sua configuração criada e salva automaticamente sem o erro `❌ Servidor não encontrado na database!`.
-   - **`commands/abrir.js`:** Implementada a execução do comando `/abrir` para criar tickets diretamente em vez de função vazia que gerava timeout na API do Discord.
-   - **`index.js`:** Fallback seguro de autenticação (usando `process.env.TOKEN || process.env.DISCORD_TOKEN || config.token`) e tratamento de exceção no registro de comandos slash.
+Novo bot modular em **JavaScript (Node.js)** desenvolvido com arquitetura limpa, alta estabilidade, servidor HTTP embutido e sistema de persistência em nuvem para hospedagem 24/7 no **Render**.
 
 ---
 
-## 🛠️ Variáveis de Ambiente no Render
+## 📁 Estrutura do Projeto
 
-| Variável | Descrição | Padrão / Exemplo |
+```
+nivesalers/
+├── src/
+│   ├── config/
+│   │   └── index.js              # Variáveis de ambiente e opções globais
+│   ├── commands/                 # Comandos Slash organizados por categorias
+│   │   ├── general/
+│   │   │   ├── ping.js           # Latência e tempo online em tempo real
+│   │   │   ├── help.js           # Central de ajuda interativa
+│   │   │   └── info.js           # Estatísticas do bot e status da nuvem
+│   │   └── admin/
+│   │       ├── clear.js          # Limpeza de mensagens em massa
+│   │       └── config.js         # Configurações do servidor com salvamento em nuvem
+│   ├── events/                   # Manipuladores de eventos do Discord
+│   │   ├── client/
+│   │   │   └── ready.js          # Inicialização, presença rotativa e registro de comandos
+│   │   └── interactions/
+│   │       └── interactionCreate.js # Execução segura de comandos, botões e modais
+│   ├── handlers/
+│   │   ├── commandHandler.js     # Carregador dinâmico de comandos slash
+│   │   └── eventHandler.js       # Carregador dinâmico de eventos
+│   ├── services/
+│   │   ├── cloudStorage.js       # Persistência de dados em nuvem para o Render
+│   │   └── httpServer.js         # Servidor HTTP 24/7 para Health Check do Render
+│   ├── utils/
+│   │   ├── logger.js             # Logger com cores e timestamps
+│   │   └── embeds.js             # Modelos padronizados de embeds
+│   └── index.js                  # Ponto de entrada da aplicação
+├── data/                         # Armazenamento local de configurações (espelhado na nuvem)
+├── render.yaml                   # Configuração de deploy do Render (rootDir: .)
+├── package.json
+└── README.md
+```
+
+---
+
+## ☁️ Sistema de Cloud Storage para Render
+
+No Render, o disco local é efêmero (reinicializações ou novos deploys resetam arquivos locais). Para que seus clientes nunca percam configurações:
+
+1. **Recuperação Automática no Boot:** O bot puxa o snapshot mais recente da nuvem (branch `cloud-data` no GitHub ou endpoint configurado).
+2. **Auto-Sync:** Toda vez que um administrador altera uma configuração (como em `/config`), os dados são automaticamente sincronizados na nuvem.
+3. **Backup Periódico:** Um snapshot preventivo roda a cada 10 minutos.
+
+---
+
+## 🌐 Servidor HTTP Embutido (Sem Painel Web)
+
+O bot conta com um servidor HTTP headless rodando em `process.env.PORT` (padrão 3000):
+- `GET /` — Retorna status em JSON (uptime, memória, status da nuvem, latência).
+- `GET /health` e `GET /ping` — Endpoints para o Health Check do Render (retornam `200 OK`).
+
+---
+
+## ⚙️ Variáveis de Ambiente no Render
+
+| Variável | Descrição | Exemplo |
 | :--- | :--- | :--- |
-| `TOKEN` | Token do Bot no Discord Developer Portal | `OT...` |
-| `PORT` | Porta HTTP injetada automaticamente pelo Render | `10000` ou `3000` |
-| `GITHUB_TOKEN` | Token com permissão `repo` para sincronização de dados | `ghp_...` |
-| `GITHUB_REPO` | Repositório onde o backup de nuvem é mantido | `bsstore48-bot/NiveSalers` |
-| `GITHUB_DATA_BRANCH` | Branch onde os dados de clientes são persistidos | `cloud-data` |
-| `NODE_ENV` | Ambiente de execução | `production` |
-
----
-
-## 📡 Endpoints HTTP (Sem painel web)
-
-- `GET /` — Status geral em formato JSON (tempo online, ping, servidores conectados, status da nuvem).
-- `GET /health` — Health check (retorna `200 OK`).
-- `GET /api/cloud/status` — Status da sincronização na nuvem.
-- `POST /api/cloud/sync` — Força sincronização imediata com a nuvem.
-- `POST /api/cloud/pull` — Restaura as configurações da nuvem para o container local.
-- `GET /api/cloud/backup` — Exporta e baixa o arquivo JSON com todas as configurações de clientes.
-- `POST /api/cloud/restore` — Restaura um snapshot JSON enviado no corpo da requisição.
+| `TOKEN` | Token do bot no Discord Developer Portal | `OTk4...` |
+| `CLIENT_ID` | Application ID do bot no Discord | `1373832...` |
+| `GITHUB_TOKEN` | Token com permissão `repo` para persistência em nuvem | `ghp_...` |
+| `GITHUB_REPO` | Repositório de persistência | `bsstore48-bot/NiveSalers` |
+| `GITHUB_DATA_BRANCH` | Branch onde os snapshots são guardados | `cloud-data` |
+| `PORT` | Porta HTTP (injetada automaticamente pelo Render) | `10000` |
