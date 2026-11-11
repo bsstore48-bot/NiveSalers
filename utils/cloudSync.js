@@ -321,9 +321,10 @@ function getStatus() {
 }
 
 // Inicia sincronização periódica a cada 10 minutos
-setInterval(() => {
+const timerSincronizacao = setInterval(() => {
     agendarSincronizacao();
 }, 10 * 60 * 1000);
+if (timerSincronizacao.unref) timerSincronizacao.unref();
 
 module.exports = {
     pullFromCloud,
