@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: nivesalers
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    healthCheckPath: /health
+    envVars:
+      - key: TOKEN
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: bsstore48-bot/NiveSalers
+      - key: GITHUB_DATA_BRANCH
+        value: cloud-data
+      - key: NODE_ENV
+        value: production

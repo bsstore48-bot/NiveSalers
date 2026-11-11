@@ -1,0 +1,56 @@
+{
+  "titulo": "🎫 Sistema de Tickets",
+  "descricao": "`icy studios`\n\n👋🏾 - Seja bem-vindo ao atendimento da icyStudios!\n\n❓️- Categorias:\n\n> Suporte: Suporte geral do servidor, problemas com compra, erros e etc\n\n> Parceria: Realize parcerias com seu servidor/projeto, onde você ganha o direito de um design grátis\n\n> Reportar: Serve para reportar membros por atividade contra os termos, ou reportar um designer ou admin por abuso de poder e etc.\n\n> Financeiro: Serve para comprar varios designs de uma vez, sem abrir vários carrinhos.\n\n> Outros: Qualquer assunto não listado acima.\n\n🧑🏽‍💻 - Obrigado pela preferência!",
+  "cor": "#FFFFFF",
+  "estilo": "lista",
+  "painelModo": "varios",
+  "botaoUnico": "Abrir ticket",
+  "botoes": [
+    "Suporte",
+    "Parceria",
+    "Reportar",
+    "Financeiro",
+    "Outros"
+  ],
+  "tipos": {},
+  "categoria": "1553543792139837570",
+  "tipo": "canal",
+  "atendentes": [
+    "1553124528513884191",
+    "1553136394736635914",
+    "1553136559190970440",
+    "1553124526080925808"
+  ],
+  "logs": null,
+  "horarioInicio": null,
+  "horarioFim": null,
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [],
+  "mensagemBoasVindas": "📌 Olá {user}, seja bem-vindo(a) ao nosso atendimento.\n\n✅ Seu ticket foi aberto com sucesso.\n⏳ Em breve um atendente irá lhe auxiliar.\n\n📝 Enquanto isso, descreva com clareza o seu problema ou dúvida.\n\n🔹 Evite o envio de mensagens repetidas.\n🔹 As solicitações são atendidas em ordem de chegada.\n\n🔒 Este canal é privado. Apenas você e a equipe responsável possuem acesso.\n\n🙏 Agradecemos pela sua paciência e compreensão.",
+  "contadorTickets": 1,
+  "plano": "Gratis",
+  "banner": null,
+  "footer": null,
+  "footerAutor": "Nive Bots",
+  "transcriptModo": "txt",
+  "categoriaVoz": null,
+  "canalTopico": null,
+  "vozObrigatoria": false,
+  "nomeCanalFormato": "{tipo}・{user}・{numero}",
+  "ticketsAbertos": {},
+  "blacklist": [],
+  "ia": {
+    "ativa": false,
+    "modoNiveIA": false,
+    "apiKeyPropria": null,
+    "prompt": null,
+    "aguardandoPrompt": false,
+    "aguardandoConfirmacao": false,
+    "promptPendente": null
+  },
+  "feedback": {
+    "ativo": false,
+    "canalLogs": null,
+    "pendentes": {}
+  }
+}

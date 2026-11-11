@@ -1,0 +1,55 @@
+{
+  "titulo": "🎫 Sistema de Tickets",
+  "descricao": "Clique na opção abaixo para abrir um ticket com a nossa equipe.",
+  "cor": "#2b2d31",
+  "estilo": "lista",
+  "painelModo": "varios",
+  "botaoUnico": "Abrir ticket",
+  "botoes": [
+    "Suporte",
+    "Dúvidas",
+    "Denúnciar Membro",
+    "Parceria",
+    "Propostas",
+    "Financeiro",
+    "Outros"
+  ],
+  "tipos": {},
+  "categoria": null,
+  "canalTopicos": "1546284670205825185",
+  "tipo": "topico",
+  "atendentes": [
+    "1546284512529621083",
+    "1546284508066742334",
+    "1546284509815775233",
+    "1546284510998564866",
+    "1546284520490405989"
+  ],
+  "logs": null,
+  "horarioInicio": null,
+  "horarioFim": null,
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [],
+  "mensagemBoasVindas": "📌 Olá {user}, seja bem-vindo(a) ao nosso atendimento.\n\n✅ Seu ticket foi aberto com sucesso.\n⏳ Em breve um atendente irá lhe auxiliar.\n\n📝 Enquanto isso, descreva com clareza o seu problema ou dúvida.\n\n🔹 Evite o envio de mensagens repetidas.\n🔹 As solicitações são atendidas em ordem de chegada.\n\n🔒 Este canal é privado. Apenas você e a equipe responsável possuem acesso.\n\n🙏 Agradecemos pela sua paciência e compreensão.",
+  "contadorTickets": 2,
+  "plano": "VIP",
+  "banner": null,
+  "footer": null,
+  "footerAutor": "Nive Bots",
+  "transcriptModo": "txt",
+  "categoriaVoz": null,
+  "vozObrigatoria": false,
+  "blacklist": [],
+  "ia": {
+    "ativa": false,
+    "prompt": null,
+    "provedor": "niveia"
+  },
+  "nomeCanalFormato": "{tipo}・{user}・{numero}",
+  "ticketsAbertos": {},
+  "feedback": {
+    "ativo": false,
+    "canalLogs": null,
+    "pendentes": {}
+  }
+}

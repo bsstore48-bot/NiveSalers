@@ -1,0 +1,39 @@
+{
+  "titulo": "Sistema de Tickets Área 51",
+  "descricao": "Bem-vindo ao suporte da AR51! 👾\nSe você precisa de ajuda, denúncia ou suporte, abra um ticket e nossa equipe irá te atender o mais rápido possível.\n\n📌 Antes de abrir um ticket:\n • Explique seu problema com clareza\n• Envie prints se necessário\n• Tenha paciência, nossa staff irá responder \n\n⚠️ Regras do Ticket:\n• Não marque staff sem necessidade\n• Não abra tickets sem motivo\n• Respeite todos da equipe! \n\n🔒 Quando seu problema for resolvido, o ticket será fechado pela administração.",
+  "cor": "#FF0000",
+  "estilo": "lista",
+  "botoes": [
+    "Suporte",
+    "Parceria",
+    "Denúncias",
+    "Outros",
+    "Dúvidas",
+    "Dev"
+  ],
+  "categoria": "1465814998872887397",
+  "tipo": "canal",
+  "atendentes": [
+    "1525637030300614847",
+    "1524593899421569055",
+    "1466517590783557734"
+  ],
+  "logs": "1515953506987671673",
+  "horarioInicio": "06:00",
+  "horarioFim": "00:00",
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [
+    "SEG./SEX."
+  ],
+  "mensagemBoasVindas": "👋🏾 Bem-vindo ao seu ticket, {nome}!\n\n✅️ Notifique os atendentes no painel de membro, em breve  eles irão te atender\n\n⛔️ Evite nos marcar excessivamente, pois isso pode gerar confusão\n\n☣️ Obrigado pela paciência!.",
+  "contadorTickets": 370,
+  "plano": "VIP",
+  "banner": "https://cdn.discordapp.com/attachments/1510819729256878171/1526081077880295474/image-6.jpg?ex=6a55b942&is=6a5467c2&hm=ec02a30eec2afbaf5eb988c6c243b8c69e4351103b86dc2b6557af23b5a8f4ba&",
+  "nomeCanalFormato": "{tipo}・{user}・{numero}",
+  "ticketsAbertos": {},
+  "feedback": {
+    "ativo": true,
+    "canalLogs": "1479305846755426377",
+    "pendentes": {}
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "titulo": "Sistema de tickets",
+  "descricao": "Bem-vindo à Central de Atendimento oficial da Nive!\n\nPrecisa de ajuda? Abra um ticket e nossa equipe poderá analisar sua solicitação de forma organizada e segura.\n\n📌 Antes de abrir um ticket\n\n- Explique seu problema com o máximo de detalhes possível.\n- Envie prints ou informações que possam ajudar na análise.\n- Evite abrir vários tickets para o mesmo assunto.\n- Aguarde a resposta da equipe após enviar sua solicitação.\n\n🛠️ Categorias de atendimento\n\nSuporte: dúvidas, problemas e dificuldades com nossos serviços.\nDenúncias: reporte comportamentos ou situações que violem as regras.\nParcerias: assuntos relacionados a parcerias e divulgações.\nFinanceiro: questões relacionadas a pagamentos ou compras, quando aplicável.\nOutros: assuntos que não se encaixam nas categorias anteriores.\n\n**Importante: nunca envie senhas, tokens ou outras informações confidenciais dentro de um ticket.**\n\nNossa equipe fará o possível para atender sua solicitação da melhor maneira possível. 💙",
+  "cor": "#000000",
+  "estilo": "lista",
+  "painelModo": "varios",
+  "botaoUnico": "Abrir ticket",
+  "botoes": [
+    "Suporte",
+    "Dúvidas",
+    "Denúncias",
+    "Parceria",
+    "Outros"
+  ],
+  "tipos": {},
+  "categoria": "1540799915800928427",
+  "tipo": "topico",
+  "atendentes": [
+    "1540794131570364527",
+    "1540794133885493370",
+    "1540794119830634626",
+    "1540794125492690964",
+    "1540794122405675038",
+    "1540794098108211301"
+  ],
+  "logs": "1540799921685528596",
+  "horarioInicio": null,
+  "horarioFim": null,
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [],
+  "mensagemBoasVindas": "Olá {user}, seja bem-vindo(a) ao nosso atendimento.\n\nSeu ticket foi aberto com sucesso e em breve um atendente irá lhe auxiliar.\n\nDescreva com clareza o seu problema ou dúvida para agilizarmos o processo.\n\nEste canal é privado — apenas você e a equipe responsável possuem acesso.",
+  "contadorTickets": 17,
+  "plano": "VIP",
+  "banner": null,
+  "footer": null,
+  "footerAutor": "Nive Bots",
+  "transcriptModo": "txt",
+  "categoriaVoz": null,
+  "canalTopico": "1547672423862771842",
+  "vozObrigatoria": false,
+  "nomeCanalFormato": "{tipo}・{user}・{numero}",
+  "ticketsAbertos": {
+    "1537973815378976768": {
+      "donoId": "1504153254643367946",
+      "tipo": "suporte",
+      "numero": "003",
+      "criadoEm": 1786751932155,
+      "responsavel": "1504153254643367946",
+      "prioridade": "Normal",
+      "motivoFechamento": null,
+      "notas": [],
+      "donoSaiuDoServidor": false
+    },
+    "1554564228151648256": {
+      "donoId": "1476868183926374401",
+      "tipo": "suporte",
+      "numero": "017",
+      "criadoEm": 1790707413280,
+      "responsavel": "1504153254643367946",
+      "prioridade": "Normal",
+      "motivoFechamento": null,
+      "notas": [],
+      "donoSaiuDoServidor": false,
+      "abertoPor": "1476868183926374401",
+      "fechadoPor": null,
+      "painelMessageId": "1554564308543737956",
+      "iaAtiva": false,
+      "historicoIa": [],
+      "vozId": null,
+      "ehTopico": true
+    }
+  },
+  "blacklist": [],
+  "ia": {
+    "ativa": true,
+    "modoNiveIA": false,
+    "apiKeyPropria": "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",
+    "prompt": "Você é uma ia do servidor da Nive, você precisa ser edcuada\n\na nive e uma empresa de bota pra discord que oferece\n\nvendas\n\ntickets\n\nmoderação \n\nantiraid\n\nfilas ff\n\ne até APIs",
+    "aguardandoPrompt": false,
+    "aguardandoConfirmacao": false,
+    "promptPendente": null,
+    "provedor": "niveia"
+  },
+  "feedback": {
+    "ativo": true,
+    "canalLogs": "1540840889906110554",
+    "pendentes": {}
+  },
+  "canalTopicos": "1540799968707747870",
+  "transcriptSite": false
+}

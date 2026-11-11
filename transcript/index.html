@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transcript • Ticket #7421 • NiveBOTS</title>
+  <meta name="description" content="Transcript do ticket #7421 - Atendimento NiveBOTS">
+  <meta name="theme-color" content="#00C8FF">
+  <meta name="robots" content="noindex, nofollow">
+
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    :root {
+      --ka: #00C8FF;
+      --ka2: #00E0FF;
+      --kg: rgba(0, 200, 255, .12);
+      --kg2: rgba(0, 224, 255, .08);
+      --kgl: rgba(255, 255, 255, .04);
+      --kgb: rgba(255, 255, 255, .07);
+      --kgr: rgba(255, 255, 255, .025);
+      --kbd: #0a0a10;
+      --kbs: #12121a;
+      --kt: #ececf1;
+      --kt2: #7a7a8c;
+      --kr: 16px;
+      --ks: 0 4px 24px rgba(0, 0, 0, .3);
+    }
+
+    html[data-theme="light"] {
+      --ka: #00A6D6;
+      --ka2: #00C8FF;
+      --kg: rgba(0, 166, 214, .08);
+      --kg2: rgba(0, 200, 255, .06);
+      --kgl: rgba(255, 255, 255, .65);
+      --kgb: rgba(0, 0, 0, .06);
+      --kgr: rgba(0, 0, 0, .03);
+      --kbd: #f0f2f5;
+      --kbs: #ffffff;
+      --kt: #1a1a2e;
+      --kt2: #6b6b80;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Sora', sans-serif;
+      background: var(--kbd);
+      color: var(--kt);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 80px 24px 40px;
+    }
+
+    .mono { font-family: 'Fira Code', monospace; }
+
+    
+    .top-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: var(--kbs);
+      border-bottom: 1px solid var(--kgb);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .top-bar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .top-bar-left .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--kt2);
+      text-decoration: none;
+      background: var(--kgl);
+      border: 1px solid var(--kgb);
+      transition: all .2s;
+    }
+    .top-bar-left .back-btn:hover {
+      border-color: var(--ka);
+      color: var(--kt);
+    }
+    .top-bar-left .back-btn .lucide { width: 14px; height: 14px; }
+
+    .top-bar-left .ticket-id {
+      font-family: 'Fira Code', monospace;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ka);
+      background: var(--kg);
+      padding: 4px 14px;
+      border-radius: 8px;
+    }
+
+    .top-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--kt2);
+    }
+    .top-bar-right .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .4; transform: scale(1.5); }
+    }
+    .top-bar-right .status-text { font-weight: 600; color: #22c55e; }
+
+    
+    .ticket-banner {
+      width: 100%;
+      max-width: 820px;
+      background: var(--kbs);
+      border: 1px solid var(--kgb);
+      border-radius: var(--kr);
+      padding: 20px 24px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .ticket-banner .info {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .ticket-banner .info .avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--ka), var(--ka2));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 20px;
+      color: #fff;
+    }
+    .ticket-banner .info .details .name {
+      font-weight: 700;
+      font-size: 1rem;
+    }
+    .ticket-banner .info .details .sub {
+      font-size: 12px;
+      color: var(--kt2);
+    }
+
+    .ticket-banner .badge-status {
+      padding: 6px 16px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(34, 197, 94, .12);
+      color: #22c55e;
+      border: 1px solid rgba(34, 197, 94, .2);
+    }
+
+    
+    .chat-container {
+      width: 100%;
+      max-width: 820px;
+      background: var(--kbs);
+      border: 1px solid var(--kgb);
+      border-radius: var(--kr);
+      overflow: hidden;
+      box-shadow: var(--ks);
+    }
+
+    
+    .chat-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--kgb);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--kgl);
+    }
+    .chat-header .lucide { width: 18px; height: 18px; color: var(--kt2); }
+    .chat-header span { font-size: 13px; font-weight: 600; color: var(--kt2); }
+    .chat-header .highlight { color: var(--ka); }
+
+    
+    .messages {
+      padding: 16px 20px;
+      max-height: 600px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background: var(--kbd);
+    }
+
+    
+    .message {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      animation: fadeInUp .3s ease;
+    }
+    .message.system {
+      justify-content: center;
+    }
+    .message.system .system-msg {
+      background: var(--kg);
+      padding: 6px 16px;
+      border-radius: 9999px;
+      font-size: 12px;
+      color: var(--kt2);
+      border: 1px solid var(--kgb);
+    }
+
+    .message .msg-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14px;
+      color: #fff;
+    }
+    .message .msg-avatar.bot {
+      background: linear-gradient(135deg, var(--ka), var(--ka2));
+    }
+    .message .msg-avatar.user1 { background: #8b5cf6; }
+    .message .msg-avatar.user2 { background: #f59e0b; }
+    .message .msg-avatar.user3 { background: #ec4899; }
+    .message .msg-avatar.user4 { background: #14b8a6; }
+    .message .msg-avatar.user5 { background: #f472b6; }
+
+    .message .msg-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .message .msg-content .msg-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 2px;
+    }
+    .message .msg-content .msg-header .username {
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+    .message .msg-content .msg-header .username.bot-name {
+      color: var(--ka);
+    }
+    .message .msg-content .msg-header .timestamp {
+      font-size: 10px;
+      color: var(--kt2);
+      font-family: 'Fira Code', monospace;
+    }
+    .message .msg-content .msg-header .badge-role {
+      font-size: 9px;
+      padding: 1px 8px;
+      border-radius: 9999px;
+      font-weight: 700;
+      background: var(--kg);
+      color: var(--kt2);
+    }
+    .message .msg-content .msg-header .badge-role.bot-badge {
+      background: rgba(0, 200, 255, .15);
+      color: var(--ka);
+    }
+
+    .message .msg-content .msg-text {
+      font-size: 0.92rem;
+      line-height: 1.6;
+      word-wrap: break-word;
+    }
+    .message .msg-content .msg-text .highlight-text {
+      color: var(--ka);
+      font-weight: 600;
+    }
+    .message .msg-content .msg-text .code-block {
+      background: var(--kgl);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      border: 1px solid var(--kgb);
+    }
+
+    
+    .embed-message {
+      margin-top: 8px;
+      background: var(--kgl);
+      border-left: 4px solid var(--ka);
+      border-radius: 0 8px 8px 0;
+      padding: 12px 16px;
+      max-width: 480px;
+      border: 1px solid var(--kgb);
+      border-left-width: 4px;
+    }
+    .embed-message .embed-title {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--kt);
+    }
+    .embed-message .embed-desc {
+      font-size: 0.85rem;
+      color: var(--kt2);
+      margin-top: 4px;
+    }
+    .embed-message .embed-field {
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: var(--kgr);
+      border-radius: 6px;
+      border: 1px solid var(--kgb);
+    }
+    .embed-message .embed-field .field-name {
+      font-weight: 600;
+      font-size: 0.75rem;
+      color: var(--kt2);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .embed-message .embed-field .field-value {
+      font-size: 0.85rem;
+      color: var(--kt);
+    }
+    .embed-message .embed-footer {
+      margin-top: 8px;
+      font-size: 0.7rem;
+      color: var(--kt2);
+      border-top: 1px solid var(--kgb);
+      padding-top: 6px;
+    }
+
+    .message .msg-content .msg-text .emoji {
+      font-size: 1.2rem;
+    }
+
+    
+    .date-divider {
+      text-align: center;
+      padding: 12px 0 8px;
+      font-size: 11px;
+      color: var(--kt2);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
+    }
+    .date-divider::before,
+    .date-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--kgb);
+      max-width: 80px;
+    }
+
+    
+    .chat-footer {
+      padding: 12px 20px 16px;
+      border-top: 1px solid var(--kgb);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: var(--kgl);
+    }
+    .chat-footer .input-sim {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 10px;
+      background: var(--kbd);
+      border: 1px solid var(--kgb);
+      font-size: 13px;
+      color: var(--kt2);
+      cursor: default;
+    }
+    .chat-footer .input-sim .lucide { width: 16px; height: 16px; vertical-align: middle; margin-right: 6px; }
+    .chat-footer .btn-sim {
+      padding: 8px 18px;
+      border-radius: 10px;
+      background: var(--kg);
+      border: 1px solid var(--kgb);
+      color: var(--kt2);
+      font-weight: 600;
+      font-size: 12px;
+      cursor: default;
+    }
+
+    
+    .transcript-info {
+      width: 100%;
+      max-width: 820px;
+      margin-top: 20px;
+      padding: 14px 20px;
+      background: var(--kbs);
+      border: 1px solid var(--kgb);
+      border-radius: var(--kr);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .transcript-info .left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--kt2);
+    }
+    .transcript-info .left .lucide { width: 16px; height: 16px; color: var(--ka); }
+    .transcript-info .right {
+      display: flex;
+      gap: 10px;
+    }
+    .transcript-info .right .tag {
+      padding: 4px 14px;
+      border-radius: 9999px;
+      font-size: 10px;
+      font-weight: 700;
+      background: var(--kg);
+      color: var(--kt2);
+      border: 1px solid var(--kgb);
+    }
+    .transcript-info .right .tag.generated {
+      background: rgba(0, 200, 255, .1);
+      color: var(--ka);
+      border-color: rgba(0, 200, 255, .2);
+    }
+
+    
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    
+    @media (max-width: 600px) {
+      body { padding: 70px 12px 20px; }
+      .top-bar { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+      .top-bar-left .back-btn span { display: none; }
+      .ticket-banner { padding: 16px; }
+      .ticket-banner .info .avatar { width: 40px; height: 40px; font-size: 16px; }
+      .messages { padding: 12px 14px; max-height: 450px; }
+      .message .msg-avatar { width: 30px; height: 30px; font-size: 12px; }
+      .message .msg-content .msg-text { font-size: 0.85rem; }
+      .embed-message { max-width: 100%; }
+      .chat-footer { flex-wrap: wrap; }
+      .chat-footer .input-sim { min-width: 100%; }
+      .transcript-info { flex-direction: column; align-items: flex-start; }
+    }
+
+    @media (max-width: 400px) {
+      .top-bar-left .ticket-id { font-size: 11px; padding: 2px 10px; }
+      .ticket-banner .info .details .name { font-size: 0.85rem; }
+    }
+  </style>
+</head>
+<body>
+
+  
+  <header class="top-bar">
+    <div class="top-bar-left">
+      <a href="#" class="back-btn" onclick="history.back()">
+        <i data-lucide="arrow-left"></i>
+        <span>Voltar</span>
+      </a>
+      <span class="ticket-id">#7421</span>
+    </div>
+    <div class="top-bar-right">
+      <span class="status-dot"></span>
+      <span class="status-text">Atendimento finalizado</span>
+    </div>
+  </header>
+
+  
+  <div class="ticket-banner">
+    <div class="info">
+      <div class="avatar">N</div>
+      <div class="details">
+        <div class="name">NiveBOTS • Suporte</div>
+        <div class="sub">Ticket criado em 24 de agosto de 2026 • 14:32</div>
+      </div>
+    </div>
+    <span class="badge-status">✅ Finalizado</span>
+  </div>
+
+  
+  <div class="chat-container">
+
+    
+    <div class="chat-header">
+      <i data-lucide="hash"></i>
+      <span>ticket-<span class="highlight">7421</span></span>
+      <span style="margin-left:auto;font-size:11px;color:var(--kt2);">
+        <i data-lucide="users" style="width:14px;height:14px;"></i> 3 participantes
+      </span>
+    </div>
+
+    
+    <div class="messages">
+
+      
+      <div class="date-divider">24 de agosto de 2026</div>
+
+      
+      <div class="message system">
+        <span class="system-msg">
+          <i data-lucide="ticket" style="width:12px;height:12px;vertical-align:middle;"></i>
+          Ticket #7421 aberto por <strong>João</strong>
+        </span>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user1">J</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">João</span>
+            <span class="timestamp">14:32</span>
+            <span class="badge-role">Cliente</span>
+          </div>
+          <div class="msg-text">
+            Olá! Estou tendo problemas com o bot de vendas. Ele não está reconhecendo meus produtos.
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar bot">N</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username bot-name">NiveBOTS</span>
+            <span class="timestamp">14:32</span>
+            <span class="badge-role bot-badge">🤖 Bot</span>
+          </div>
+          <div class="msg-text">
+            Obrigado pelo contato! <span class="highlight-text">@João</span>, um de nossos atendentes irá te ajudar em breve. 
+            Enquanto isso, verifique se você configurou corretamente os produtos no painel de vendas.
+          </div>
+          
+          <div class="embed-message">
+            <div class="embed-title">📦 Sistema de Vendas - Ajuda Rápida</div>
+            <div class="embed-desc">Verifique os passos abaixo para configurar seus produtos:</div>
+            <div class="embed-field">
+              <div class="field-name">Passo 1</div>
+              <div class="field-value">Use <span class="code-block">/produto criar</span> para adicionar um novo produto</div>
+            </div>
+            <div class="embed-field">
+              <div class="field-name">Passo 2</div>
+              <div class="field-value">Defina o preço com <span class="code-block">/produto preço</span></div>
+            </div>
+            <div class="embed-footer">📌 NiveBOTS • Sistema de Vendas v3.1.0</div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user1">J</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">João</span>
+            <span class="timestamp">14:35</span>
+            <span class="badge-role">Cliente</span>
+          </div>
+          <div class="msg-text">
+            Já fiz isso, mas continua dando erro. Quando tento criar um produto, aparece <span class="code-block">"Erro: produto já existe"</span> mesmo não tendo nenhum cadastrado.
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user2">M</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">Maria (Suporte)</span>
+            <span class="timestamp">14:38</span>
+            <span class="badge-role" style="background:rgba(0,200,255,.15);color:var(--ka);">👤 Atendente</span>
+          </div>
+          <div class="msg-text">
+            Olá <span class="highlight-text">@João</span>, tudo bem? Vou te ajudar com isso! 
+            Esse erro geralmente acontece quando o banco de dados local do bot está com conflito.
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user2">M</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">Maria (Suporte)</span>
+            <span class="timestamp">14:39</span>
+            <span class="badge-role" style="background:rgba(0,200,255,.15);color:var(--ka);">👤 Atendente</span>
+          </div>
+          <div class="msg-text">
+            Pode tentar rodar o comando <span class="code-block">/produto listar</span> para ver se realmente não tem nenhum produto cadastrado? 
+            Se aparecer algo, podemos remover com <span class="code-block">/produto deletar [nome]</span>
+          </div>
+          
+          <div class="embed-message">
+            <div class="embed-title">📋 Comandos Úteis</div>
+            <div class="embed-desc">Lista de comandos para gerenciar produtos:</div>
+            <div class="embed-field">
+              <div class="field-name">📌 Listar produtos</div>
+              <div class="field-value"><span class="code-block">/produto listar</span></div>
+            </div>
+            <div class="embed-field">
+              <div class="field-name">🗑️ Deletar produto</div>
+              <div class="field-value"><span class="code-block">/produto deletar [nome_do_produto]</span></div>
+            </div>
+            <div class="embed-field">
+              <div class="field-name">📦 Criar produto</div>
+              <div class="field-value"><span class="code-block">/produto criar [nome] [preco] [descricao]</span></div>
+            </div>
+            <div class="embed-footer">📌 NiveBOTS • Documentação de Comandos</div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user1">J</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">João</span>
+            <span class="timestamp">14:42</span>
+            <span class="badge-role">Cliente</span>
+          </div>
+          <div class="msg-text">
+            Ah! Deu certo! Tinha um produto chamado "Teste" que eu tinha criado e esquecido. Já removi e agora funcionou! 
+            Muito obrigado <span class="highlight-text">@Maria</span>! 🎉
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user2">M</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">Maria (Suporte)</span>
+            <span class="timestamp">14:43</span>
+            <span class="badge-role" style="background:rgba(0,200,255,.15);color:var(--ka);">👤 Atendente</span>
+          </div>
+          <div class="msg-text">
+            Que bom que deu certo <span class="highlight-text">@João</span>! 😊 
+            Se precisar de mais ajuda, estou aqui. Vou deixar algumas dicas rápidas abaixo:
+          </div>
+          
+          <div class="embed-message" style="border-left-color:#f59e0b;">
+            <div class="embed-title">💡 Dicas para o Bot de Vendas</div>
+            <div class="embed-desc">Maximize suas vendas com essas dicas:</div>
+            <div class="embed-field">
+              <div class="field-name">🚀 Dica 1</div>
+              <div class="field-value">Use <span class="code-block">/produto destaque</span> para promover produtos no canal de vendas</div>
+            </div>
+            <div class="embed-field">
+              <div class="field-name">📊 Dica 2</div>
+              <div class="field-value">Acompanhe suas vendas com <span class="code-block">/vendas relatorio</span></div>
+            </div>
+            <div class="embed-footer">📌 NiveBOTS • Dicas Rápidas</div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user1">J</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">João</span>
+            <span class="timestamp">14:45</span>
+            <span class="badge-role">Cliente</span>
+          </div>
+          <div class="msg-text">
+            Perfeito! Vou testar essas dicas agora mesmo. Valeu demais pelo suporte rápido! Vocês são incríveis! 💙
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user2">M</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">Maria (Suporte)</span>
+            <span class="timestamp">14:46</span>
+            <span class="badge-role" style="background:rgba(0,200,255,.15);color:var(--ka);">👤 Atendente</span>
+          </div>
+          <div class="msg-text">
+            Fico feliz em ajudar <span class="highlight-text">@João</span>! ❤️ 
+            Se puder, deixe um feedback sobre o atendimento usando <span class="code-block">/feedback</span>. 
+            Isso nos ajuda a melhorar cada vez mais! 😊
+          </div>
+          
+          <div class="embed-message" style="border-left-color:#22c55e;">
+            <div class="embed-title">⭐ Avalie nosso atendimento</div>
+            <div class="embed-desc">Sua opinião é muito importante para nós!</div>
+            <div class="embed-field">
+              <div class="field-name">📝 Como avaliar</div>
+              <div class="field-value">Use o comando <span class="code-block">/feedback [nota] [comentario]</span></div>
+            </div>
+            <div class="embed-field">
+              <div class="field-name">🌟 Exemplo</div>
+              <div class="field-value"><span class="code-block">/feedback 5 "Atendimento excelente!"</span></div>
+            </div>
+            <div class="embed-footer">📌 NiveBOTS • Feedback</div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar user1">J</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username">João</span>
+            <span class="timestamp">14:48</span>
+            <span class="badge-role">Cliente</span>
+          </div>
+          <div class="msg-text">
+            Feito! Já deixei meu feedback. Muito obrigado mais uma vez! 🙏
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message">
+        <div class="msg-avatar bot">N</div>
+        <div class="msg-content">
+          <div class="msg-header">
+            <span class="username bot-name">NiveBOTS</span>
+            <span class="timestamp">14:49</span>
+            <span class="badge-role bot-badge">🤖 Bot</span>
+          </div>
+          <div class="msg-text">
+            ✅ <span class="highlight-text">Ticket #7421</span> foi <strong>finalizado</strong> por <span class="highlight-text">@Maria</span>.
+            <br><br>
+            📄 Um transcript deste atendimento foi salvo automaticamente.
+            <br>
+            🔗 <span style="color:var(--ka);">#transcripts</span>
+          </div>
+          
+          <div class="embed-message" style="border-left-color:#22c55e;">
+            <div class="embed-title">✅ Ticket Finalizado</div>
+            <div class="embed-desc">
+              <strong>Ticket:</strong> #7421<br>
+              <strong>Cliente:</strong> João<br>
+              <strong>Atendente:</strong> Maria<br>
+              <strong>Tempo de atendimento:</strong> 17 minutos<br>
+              <strong>Avaliação:</strong> ⭐⭐⭐⭐⭐ (5/5)
+            </div>
+            <div class="embed-footer">📌 NiveBOTS • Transcript Automático • 24/08/2026</div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div class="message system">
+        <span class="system-msg">
+          <i data-lucide="lock" style="width:12px;height:12px;vertical-align:middle;"></i>
+          Ticket #7421 foi fechado • Transcript salvo em <strong>#transcripts</strong>
+        </span>
+      </div>
+
+    </div>
+
+    
+    <div class="chat-footer">
+      <div class="input-sim">
+        <i data-lucide="lock" style="width:14px;height:14px;"></i>
+        Canal fechado — apenas leitura
+      </div>
+      <span class="btn-sim">Enviar</span>
+    </div>
+
+  </div>
+
+  
+  <div class="transcript-info">
+    <div class="left">
+      <i data-lucide="file-text"></i>
+      <span>Transcript gerado automaticamente pela NiveBOTS</span>
+    </div>
+    <div class="right">
+      <span class="tag">📅 24/08/2026</span>
+      <span class="tag generated">✅ Verificado</span>
+    </div>
+  </div>
+
+  
+  <div style="margin-top:24px;font-size:11px;color:var(--kt2);opacity:.5;text-align:center;max-width:820px;">
+    Este é um <strong>transcript de exemplo</strong> gerado para fins de teste e avaliação da NiveBOTS.
+    <br>
+    Nenhuma informação real foi utilizada neste documento.
+  </div>
+
+  <script>
+    lucide.createIcons();
+  </script>
+
+</body>
+</html>

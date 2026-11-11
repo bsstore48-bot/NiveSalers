@@ -1,0 +1,30 @@
+{
+  "titulo": "Sistema de Ticketsbshsgs",
+  "descricao": "Clique no botao abaixo para abrir um tysysyysdyyayyavticket",
+  "cor": "#FF0000",
+  "estilo": "botao",
+  "botoes": [
+    "Suporte",
+    "Parceria",
+    "Denuncias",
+    "Duvidas"
+  ],
+  "categoria": "1502743199855415346",
+  "tipo": "topico",
+  "atendentes": [
+    "1501704345035473038"
+  ],
+  "logs": null,
+  "horarioInicio": null,
+  "horarioFim": null,
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [],
+  "mensagemBoasVindas": "Bem-vindo ao ticket {nome}. Ja notifiquei os atendentes.",
+  "contadorTickets": 1,
+  "plano": "Gratis",
+  "feedback": {
+    "ativo": false,
+    "canalLogs": null,
+    "pendentes": {}
+  }
+}

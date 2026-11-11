@@ -1,0 +1,33 @@
+{
+  "titulo": "🎫 Sistema de Tickets",
+  "descricao": "Clique na opção abaixo para abrir um ticket com a nossa equipe.\n\nPeide na minha cara",
+  "cor": "#2b2d31",
+  "estilo": "lista",
+  "botoes": [
+    "Suporte",
+    "Peidar"
+  ],
+  "categoria": "1521004983800172646",
+  "tipo": "topico",
+  "atendentes": [
+    "1521006188106481714"
+  ],
+  "logs": "1521004983800172650",
+  "horarioInicio": "11:10",
+  "horarioFim": "00:08",
+  "fusoHorario": "America/Sao_Paulo",
+  "diasFuncionamento": [
+    "SEG./SEX."
+  ],
+  "mensagemBoasVindas": "📌 Olá {user}, seja bem-vindo(a) ao nosso atendimento.\n\n✅ Seu ticket foi aberto com sucesso.\n⏳ Em breve um atendente irá lhe auxiliar.\n\n📝 Enquanto isso, descreva com clareza o seu problema ou dúvida.\n\n🔹 Evite o envio de mensagens repetidas.\n🔹 As solicitações são atendidas em ordem de chegada.\n\n🔒 Este canal é privado. Apenas você e a equipe responsável possuem acesso.\n\n🙏 Agradecemos pela sua paciência e compreensão.",
+  "contadorTickets": 3,
+  "plano": "VIP",
+  "banner": "https://cdn.discordapp.com/attachments/1523798964724301994/1526077379158474863/bolsonaro_tv-1.png?ex=6a55b5d0&is=6a546450&hm=8e801f3b0cde4c59c6eae8098bf11283993f3e44363f64f5102b48e970964e5b&",
+  "nomeCanalFormato": "{tipo}・{user}",
+  "ticketsAbertos": {},
+  "feedback": {
+    "ativo": false,
+    "canalLogs": "1521004983800172650",
+    "pendentes": {}
+  }
+}
