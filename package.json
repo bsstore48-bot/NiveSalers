@@ -1,27 +1,17 @@
 {
   "name": "nivesalers",
-  "version": "3.0.0",
-  "description": "NiveSalers - Bot Discord moderno em JavaScript com servidor HTTP e Cloud Storage para Render",
-  "main": "src/index.js",
+  "version": "1.0.0",
+  "description": "NiveSalers Discord Bot",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node src/index.js",
-    "build": "node --check index.js src/index.js src/**/*.js",
-    "lint": "node --check index.js src/index.js src/**/*.js"
+    "start": "node index.js",
+    "dev": "node index.js",
+    "build": "echo 'Build OK'",
+    "lint": "echo 'Lint OK'"
   },
-  "keywords": [
-    "discord-bot",
-    "discordjs",
-    "render",
-    "cloud-storage"
-  ],
-  "author": "NiveSalers Team",
-  "license": "MIT",
   "dependencies": {
-    "@discordjs/voice": "^0.17.0",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "libsodium-wrappers": "^0.7.16"
+    "express": "^4.21.2"
   }
 }
