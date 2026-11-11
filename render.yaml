@@ -3,6 +3,7 @@ services:
     name: nivesalers
     env: node
     plan: free
+    rootDir: .
     buildCommand: npm install
     startCommand: node index.js
     healthCheckPath: /health
