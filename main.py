@@ -7,6 +7,7 @@ import os
 import sys
 import asyncio
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 import config
@@ -57,6 +58,18 @@ async def on_ready():
     except Exception as e:
         logger.error(f"Erro ao sincronizar comandos slash: {e}")
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    logger.error(f"Erro na execução do comando {interaction.command}: {error}", exc_info=True)
+    try:
+        msg = f"Ocorreu um erro ao processar: {error}"
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+    except Exception:
+        pass
+
 async def load_extensions():
     """Carrega as cogs do bot."""
     cogs = ["cogs.ticket_panel"]
@@ -81,7 +94,6 @@ async def main():
     token = config.DISCORD_TOKEN
     if not token:
         logger.warning("DISCORD_TOKEN não encontrado no ambiente. O servidor HTTP continuará rodando para manter o Render ativo.")
-        # Mantém processo rodando caso precise de keep-alive enquanto o token é configurado
         while True:
             await asyncio.sleep(3600)
 
