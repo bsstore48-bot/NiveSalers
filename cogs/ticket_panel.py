@@ -1,7 +1,7 @@
 """
 NiveSalers - Ticket Configuration Panel Cog
-Comando /configurar painel com Componentes v2 (Layouts & Containers),
-painel de aparência, modals interativos e seletor com 10 cores de embed.
+Comando /configurar painel com botões persistentes, modals interativos
+e seletor de 10 cores com callbacks garantidos e robustos.
 """
 import discord
 from discord import app_commands
@@ -12,9 +12,6 @@ import config
 from utils.logger import logger
 from utils.emoji_manager import EmojiManager
 from database.cloud_storage import CloudStorage
-
-# Detecção dinâmica de suporte a Componentes v2 no discord.py (LayoutView e Container)
-HAS_COMPONENTS_V2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "Container")
 
 # 10 cores predefinidas para a embed do painel
 CORES_DISPONIVEIS = [
@@ -31,7 +28,7 @@ CORES_DISPONIVEIS = [
 ]
 
 def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
-    """Converte tag de emoji em discord.PartialEmoji ou string Unicode."""
+    """Converte tag de emoji em discord.PartialEmoji ou string Unicode de forma segura."""
     raw = EmojiManager.get(emoji_key, fallback=default_unicode)
     if raw.startswith("<") and raw.endswith(">"):
         try:
@@ -122,6 +119,11 @@ class TituloModal(discord.ui.Modal, title="Configurar Título"):
         logger.info(f"Título atualizado por {interaction.user} no servidor {self.guild_id}: '{novo_titulo}'")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de título: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar o título: {error}", ephemeral=True)
+
 
 class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
     """Modal para digitar a descrição do painel."""
@@ -153,6 +155,11 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
         logger.info(f"Descrição atualizada por {interaction.user} no servidor {self.guild_id}")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de descrição: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar a descrição: {error}", ephemeral=True)
+
 
 class BannerModal(discord.ui.Modal, title="Configurar Banner"):
     """Modal para inserir a imagem/banner do painel."""
@@ -182,6 +189,11 @@ class BannerModal(discord.ui.Modal, title="Configurar Banner"):
 
         logger.info(f"Banner atualizado por {interaction.user} no servidor {self.guild_id}")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de banner: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar o banner: {error}", ephemeral=True)
 
 
 class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
@@ -213,6 +225,11 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
         logger.info(f"Thumbnail atualizada por {interaction.user} no servidor {self.guild_id}")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de thumbnail: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar a thumbnail: {error}", ephemeral=True)
+
 
 # =====================================================================
 # PAINEL DE SELEÇÃO DE COR DA EMBED (10 CORES)
@@ -243,56 +260,54 @@ class CorEmbedSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para alterar esta cor.", ephemeral=True)
+        # Validação de permissões: não bloqueia se for administrador
+        if self.user_id and interaction.user.id != self.user_id and not getattr(interaction.user.guild_permissions, "administrator", False):
+            await interaction.response.send_message("Apenas administradores podem configurar este painel.", ephemeral=True)
             return
 
         cor_hex_val = self.values[0]
         cor_selecionada = next((c for c in CORES_DISPONIVEIS if c["value"] == cor_hex_val), None)
 
         if cor_selecionada:
-            cfg = CloudStorage.get_guild_config(str(self.guild_id))
+            gid = str(self.guild_id or interaction.guild_id or "direct")
+            cfg = CloudStorage.get_guild_config(gid)
             cfg["painel"]["cor_hex"] = cor_selecionada["hex"]
             cfg["painel"]["cor"] = cor_selecionada["int"]
-            await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+            await CloudStorage.save_guild_config(gid, cfg)
             logger.info(f"Cor da embed alterada por {interaction.user} para {cor_selecionada['hex']}")
 
-            # Atualiza o painel de cor com a nova cor selecionada
             await render_cor_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
 
 class CorEmbedView(discord.ui.View):
     """View do painel de cores com o select menu de 10 cores e botão de voltar."""
-    def __init__(self, guild_id: int, user_id: int):
+    def __init__(self, guild_id: int = 0, user_id: int = 0):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.user_id = user_id
 
-        # Adiciona o Select Menu das 10 cores
         self.add_item(CorEmbedSelect(guild_id, user_id))
 
-        # Botão de voltar ao painel de aparência
-        emoji_back = resolve_partial_emoji("back", "⬅️")
-        btn_voltar = discord.ui.Button(
-            label="Voltar para Aparência",
-            emoji=emoji_back,
-            style=discord.ButtonStyle.danger,
-            custom_id="btn_cor_voltar_aparencia",
-            row=1
-        )
-        btn_voltar.callback = self.on_voltar_click
-        self.add_item(btn_voltar)
+    @discord.ui.button(
+        label="Voltar para Aparência",
+        style=discord.ButtonStyle.danger,
+        custom_id="btn_cor_voltar_aparencia",
+        row=1
+    )
+    async def btn_voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Usuário {interaction.user} voltou para o painel de aparência a partir de cores.")
+        await render_appearance_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id or interaction.user.id, is_edit=True)
 
-    async def on_voltar_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
+        logger.error(f"Erro na view de cores no componente {getattr(item, 'custom_id', item)}: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Ocorreu um erro ao processar a cor.", ephemeral=True)
 
 
 async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = False):
     """Renderiza a embed de seleção de cores."""
-    cfg = CloudStorage.get_guild_config(str(guild_id))
+    gid = str(guild_id or (interaction.guild_id or "direct"))
+    cfg = CloudStorage.get_guild_config(gid)
     cor_atual_int = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
 
@@ -307,175 +322,160 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
     )
     view = CorEmbedView(guild_id, user_id)
 
-    if is_edit:
-        await interaction.response.edit_message(embed=embed, view=view)
-    else:
-        await interaction.response.edit_message(embed=embed, view=view)
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.edit_original_response(embed=embed, view=view)
+    except Exception as e:
+        logger.error(f"Erro ao renderizar painel de cores: {e}")
+        try:
+            if interaction.message:
+                await interaction.message.edit(embed=embed, view=view)
+        except Exception:
+            pass
 
 
 # =====================================================================
-# VIEW DE BOTÕES DO PAINEL DE APARÊNCIA
+# VIEW DE BOTÕES DO PAINEL DE APARÊNCIA (ROBUSTA & PERSISTENTE)
 # =====================================================================
 
 class AppearanceConfigView(discord.ui.View):
     """
     View de botões do painel de aparência.
     Botões: Título, Descrição, Banner, Thumbnail, Cor da embed e Voltar.
+    Implementados com o decorator @discord.ui.button para resposta instantânea garantida.
     """
-    def __init__(self, guild_id: int, user_id: int):
+    def __init__(self, guild_id: int = 0, user_id: int = 0):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.user_id = user_id
 
+        # Atribuição segura dos emojis aos botões
         emoji_edit = resolve_partial_emoji("edit", "✏️")
         emoji_back = resolve_partial_emoji("back", "⬅️")
 
-        # Botão 1: Título (abre TituloModal)
-        btn_titulo = discord.ui.Button(
-            label="Título",
-            emoji=emoji_edit,
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_aparencia_titulo",
-            row=0
-        )
-        btn_titulo.callback = self.on_titulo_click
-        self.add_item(btn_titulo)
+        self.btn_titulo.emoji = emoji_edit
+        self.btn_descricao.emoji = emoji_edit
+        self.btn_banner.emoji = emoji_edit
+        self.btn_thumbnail.emoji = emoji_edit
+        self.btn_cor.emoji = emoji_edit
+        self.btn_voltar.emoji = emoji_back
 
-        # Botão 2: Descrição (abre DescricaoModal)
-        btn_descricao = discord.ui.Button(
-            label="Descrição",
-            emoji=emoji_edit,
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_aparencia_descricao",
-            row=0
-        )
-        btn_descricao.callback = self.on_descricao_click
-        self.add_item(btn_descricao)
+    @discord.ui.button(
+        label="Título",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_aparencia_titulo",
+        row=0
+    )
+    async def btn_titulo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Título' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
+        await interaction.response.send_modal(TituloModal(gid, interaction.user.id))
 
-        # Botão 3: Banner (abre BannerModal)
-        btn_banner = discord.ui.Button(
-            label="Banner",
-            emoji=emoji_edit,
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_aparencia_banner",
-            row=0
-        )
-        btn_banner.callback = self.on_banner_click
-        self.add_item(btn_banner)
+    @discord.ui.button(
+        label="Descrição",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_aparencia_descricao",
+        row=0
+    )
+    async def btn_descricao(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Descrição' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
+        await interaction.response.send_modal(DescricaoModal(gid, interaction.user.id))
 
-        # Botão 4: Thumbnail (abre ThumbnailModal)
-        btn_thumbnail = discord.ui.Button(
-            label="Thumbnail",
-            emoji=emoji_edit,
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_aparencia_thumbnail",
-            row=1
-        )
-        btn_thumbnail.callback = self.on_thumbnail_click
-        self.add_item(btn_thumbnail)
+    @discord.ui.button(
+        label="Banner",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_aparencia_banner",
+        row=0
+    )
+    async def btn_banner(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Banner' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
+        await interaction.response.send_modal(BannerModal(gid, interaction.user.id))
 
-        # Botão 5: Cor da embed (abre painel com 10 cores)
-        btn_cor = discord.ui.Button(
-            label="Cor da embed",
-            emoji=emoji_edit,
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_aparencia_cor",
-            row=1
-        )
-        btn_cor.callback = self.on_cor_click
-        self.add_item(btn_cor)
+    @discord.ui.button(
+        label="Thumbnail",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_aparencia_thumbnail",
+        row=1
+    )
+    async def btn_thumbnail(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Thumbnail' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
+        await interaction.response.send_modal(ThumbnailModal(gid, interaction.user.id))
 
-        # Botão 6: Voltar ao menu principal
-        btn_voltar = discord.ui.Button(
-            label="Voltar",
-            emoji=emoji_back,
-            style=discord.ButtonStyle.danger,
-            custom_id="btn_aparencia_voltar",
-            row=1
-        )
-        btn_voltar.callback = self.on_voltar_click
-        self.add_item(btn_voltar)
+    @discord.ui.button(
+        label="Cor da embed",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_aparencia_cor",
+        row=1
+    )
+    async def btn_cor(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Cor da embed' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
+        await render_cor_panel(interaction, gid, interaction.user.id, is_edit=True)
 
-    async def on_titulo_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await interaction.response.send_modal(TituloModal(self.guild_id, self.user_id))
-
-    async def on_descricao_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await interaction.response.send_modal(DescricaoModal(self.guild_id, self.user_id))
-
-    async def on_banner_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await interaction.response.send_modal(BannerModal(self.guild_id, self.user_id))
-
-    async def on_thumbnail_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await interaction.response.send_modal(ThumbnailModal(self.guild_id, self.user_id))
-
-    async def on_cor_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-        await render_cor_panel(interaction, self.guild_id, self.user_id, is_edit=True)
-
-    async def on_voltar_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-
+    @discord.ui.button(
+        label="Voltar",
+        style=discord.ButtonStyle.danger,
+        custom_id="btn_aparencia_voltar",
+        row=1
+    )
+    async def btn_voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"Botão 'Voltar' acionado por {interaction.user}")
+        gid = self.guild_id or (interaction.guild_id or 0)
         text = format_main_panel_text()
-        v2_view = build_main_components_v2_view(text, self.guild_id, self.user_id)
-        if v2_view is not None:
-            try:
-                await interaction.response.edit_message(view=v2_view)
-                return
-            except Exception as e:
-                logger.warning(f"Erro ao atualizar view v2: {e}")
-
         embed = discord.Embed(
             description=text,
             color=config.EMBED_COLOR_DEFAULT
         )
-        std_view = PainelConfigStandardView(self.guild_id, self.user_id)
-        await interaction.response.edit_message(embed=embed, view=std_view)
+        std_view = PainelConfigStandardView(gid, interaction.user.id)
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=std_view)
+        else:
+            await interaction.edit_original_response(embed=embed, view=std_view)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
+        logger.error(f"Erro no botão {getattr(item, 'custom_id', item)}: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao processar o botão: {error}", ephemeral=True)
+        else:
+            await interaction.followup.send(f"Ocorreu um erro ao processar o botão: {error}", ephemeral=True)
 
 
-async def render_appearance_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+async def render_appearance_panel(interaction: discord.Interaction, guild_id: int, user_id: int = 0, is_edit: bool = True):
     """Função utilitária centralizada para renderizar o painel de aparência."""
-    text = format_appearance_panel_text(str(guild_id))
-    cfg = CloudStorage.get_guild_config(str(guild_id))
+    gid = str(guild_id or (interaction.guild_id or "direct"))
+    text = format_appearance_panel_text(gid)
+    cfg = CloudStorage.get_guild_config(gid)
     cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
 
-    # Tenta via Componentes V2
-    v2_view = build_appearance_components_v2_view(text, guild_id, user_id)
-    if v2_view is not None:
-        try:
-            if is_edit:
-                await interaction.response.edit_message(view=v2_view)
-            else:
-                await interaction.response.send_message(view=v2_view, ephemeral=True)
-            return
-        except Exception as e:
-            logger.warning(f"Erro ao enviar aparência em v2: {e}")
-
-    # Fallback padrão: Embed + View de botões
     embed = discord.Embed(
         description=text,
         color=cor_embed
     )
-    view = AppearanceConfigView(guild_id, user_id)
-    if is_edit:
-        await interaction.response.edit_message(embed=embed, view=view)
-    else:
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    view = AppearanceConfigView(int(guild_id) if str(guild_id).isdigit() else 0, user_id or interaction.user.id)
+
+    try:
+        if is_edit:
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(embed=embed, view=view)
+            else:
+                await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    except Exception as e:
+        logger.error(f"Erro ao renderizar painel de aparência: {e}")
+        try:
+            if interaction.message:
+                await interaction.message.edit(embed=embed, view=view)
+        except Exception as e2:
+            logger.error(f"Falha secundária ao editar mensagem: {e2}")
 
 
 # =====================================================================
@@ -486,7 +486,7 @@ class ConfigPainelSelect(discord.ui.Select):
     """
     Select Menu do painel principal de configuração.
     """
-    def __init__(self, guild_id: int, user_id: int):
+    def __init__(self, guild_id: int = 0, user_id: int = 0):
         self.guild_id = guild_id
         self.user_id = user_id
 
@@ -517,100 +517,26 @@ class ConfigPainelSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Você não tem permissão para interagir neste painel.", ephemeral=True)
-            return
-
         escolha = self.values[0] if self.values else ""
 
         if escolha == "aparencia":
-            await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+            gid = self.guild_id or (interaction.guild_id or 0)
+            await render_appearance_panel(interaction, gid, interaction.user.id, is_edit=True)
             logger.info(f"Painel de aparência acessado por {interaction.user}")
 
         elif escolha == "configuracoes":
             logger.info(f"Opção 'Configurações do painel' selecionada por {interaction.user} (sem ação por enquanto).")
-            await interaction.response.defer(ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
 
 
 class PainelConfigStandardView(discord.ui.View):
     """View padrão do painel principal."""
-    def __init__(self, guild_id: int, user_id: int):
+    def __init__(self, guild_id: int = 0, user_id: int = 0):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.user_id = user_id
         self.add_item(ConfigPainelSelect(guild_id, user_id))
-
-
-# =====================================================================
-# CONSTRUTORES DE COMPONENTES V2 (LayoutView & Container Type 17)
-# =====================================================================
-
-def build_main_components_v2_view(description_text: str, guild_id: int, user_id: int):
-    """Constrói o LayoutView v2 com Container para o painel principal."""
-    if not HAS_COMPONENTS_V2:
-        return None
-
-    try:
-        layout_view = discord.ui.LayoutView(timeout=None)
-        select_menu = ConfigPainelSelect(guild_id, user_id)
-
-        separator_spacing = getattr(discord, "SeparatorSpacing", None)
-        spacing_arg = separator_spacing.small if separator_spacing else None
-        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
-
-        container = discord.ui.Container(
-            discord.ui.TextDisplay(description_text),
-            separator,
-            discord.ui.ActionRow(select_menu),
-            accent_colour=config.EMBED_COLOR_DEFAULT
-        )
-        layout_view.add_item(container)
-        return layout_view
-    except Exception as e:
-        logger.warning(f"Não foi possível instanciar LayoutView v2 principal: {e}")
-        return None
-
-def build_appearance_components_v2_view(description_text: str, guild_id: int, user_id: int):
-    """Constrói o LayoutView v2 com Container para o painel de aparência."""
-    if not HAS_COMPONENTS_V2:
-        return None
-
-    try:
-        layout_view = discord.ui.LayoutView(timeout=None)
-        cfg = CloudStorage.get_guild_config(str(guild_id))
-        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-
-        emoji_edit = resolve_partial_emoji("edit", "✏️")
-        emoji_back = resolve_partial_emoji("back", "⬅️")
-
-        row1 = discord.ui.ActionRow(
-            discord.ui.Button(label="Título", emoji=emoji_edit, style=discord.ButtonStyle.secondary, custom_id="btn_aparencia_titulo"),
-            discord.ui.Button(label="Descrição", emoji=emoji_edit, style=discord.ButtonStyle.secondary, custom_id="btn_aparencia_descricao"),
-            discord.ui.Button(label="Banner", emoji=emoji_edit, style=discord.ButtonStyle.secondary, custom_id="btn_aparencia_banner")
-        )
-
-        row2 = discord.ui.ActionRow(
-            discord.ui.Button(label="Thumbnail", emoji=emoji_edit, style=discord.ButtonStyle.secondary, custom_id="btn_aparencia_thumbnail"),
-            discord.ui.Button(label="Cor da embed", emoji=emoji_edit, style=discord.ButtonStyle.secondary, custom_id="btn_aparencia_cor"),
-            discord.ui.Button(label="Voltar", emoji=emoji_back, style=discord.ButtonStyle.danger, custom_id="btn_aparencia_voltar")
-        )
-
-        separator_spacing = getattr(discord, "SeparatorSpacing", None)
-        spacing_arg = separator_spacing.small if separator_spacing else None
-        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
-
-        container = discord.ui.Container(
-            discord.ui.TextDisplay(description_text),
-            separator,
-            row1,
-            row2,
-            accent_colour=cor_embed
-        )
-        layout_view.add_item(container)
-        return layout_view
-    except Exception as e:
-        logger.warning(f"Não foi possível instanciar LayoutView v2 aparência: {e}")
-        return None
 
 
 # =====================================================================
@@ -629,28 +555,13 @@ class ConfigurarGroup(app_commands.Group):
     @app_commands.default_permissions(administrator=True)
     async def painel(self, interaction: discord.Interaction):
         """
-        Abre o painel de configuração com Componentes V2 (Layouts & Containers),
-        embed branca e o primeiro Select Menu dentro do layout.
+        Abre o painel de configuração com embed branca e o Select Menu principal.
         """
         guild_id = str(interaction.guild_id) if interaction.guild_id else "direct"
         CloudStorage.get_guild_config(guild_id)
 
         description_text = format_main_panel_text()
 
-        # Tenta enviar com Componentes V2
-        v2_view = build_main_components_v2_view(description_text, interaction.guild_id or 0, interaction.user.id)
-        if v2_view is not None:
-            try:
-                await interaction.response.send_message(
-                    view=v2_view,
-                    ephemeral=True
-                )
-                logger.info(f"Painel enviado via Componentes V2 (Container) para {interaction.user}")
-                return
-            except Exception as e:
-                logger.warning(f"Falha ao enviar via Components V2 direto: {e}. Usando embed + view.")
-
-        # Fallback padrão: Embed branca + ActionRow View com o Select Menu
         embed = discord.Embed(
             description=description_text,
             color=config.EMBED_COLOR_DEFAULT
@@ -675,4 +586,8 @@ class TicketPanelCog(commands.Cog):
         self.bot.tree.add_command(self.configurar_group)
 
 async def setup(bot: commands.Bot):
+    # Registra as views persistentes no bot para garantir que qualquer clique responda imediatamente
+    bot.add_view(AppearanceConfigView())
+    bot.add_view(CorEmbedView())
+    bot.add_view(PainelConfigStandardView())
     await bot.add_cog(TicketPanelCog(bot))
