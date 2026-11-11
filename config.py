@@ -16,7 +16,6 @@ APPLICATION_ID = os.environ.get("APPLICATION_ID", "").strip()
 PORT = int(os.environ.get("PORT", 8080))
 
 # Configurações de Nuvem / Persistência
-# Suporta MongoDB (MONGO_URI / MONGODB_URI), PostgreSQL (DATABASE_URL) ou GitHub API Backup
 MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or ""
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -50,5 +49,35 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "reload",
         "tag": "<:reload:1561908806584115210>",
         "fallback": "🔄"
+    },
+    "reaction_add": {
+        "id": "1561908795226198026",
+        "name": "reaction_add",
+        "tag": "<:reaction_add:1561908795226198026>",
+        "fallback": "✨"
+    },
+    "edit": {
+        "id": "1561906222062506015",
+        "name": "edit",
+        "tag": "<:edit:1561906222062506015>",
+        "fallback": "✏️"
+    },
+    "embed": {
+        "id": "1561906227305521172",
+        "name": "embed",
+        "tag": "<:embed:1561906227305521172>",
+        "fallback": "📄"
+    },
+    "image": {
+        "id": "1561907844142342196",
+        "name": "image",
+        "tag": "<:image:1561907844142342196>",
+        "fallback": "🖼️"
+    },
+    "colors": {
+        "id": "1561906164810125362",
+        "name": "colors",
+        "tag": "<:colors:1561906164810125362>",
+        "fallback": "🎨"
     }
 }
