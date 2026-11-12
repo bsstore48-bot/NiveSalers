@@ -1,29 +1,31 @@
 """
-NiveSalers - Ticket Configuration Panel Cog
-Componentes V2 (LayoutView & Container Type 17).
-Modals de imagem com componentes nativos de upload (Type 19).
-Botões de voltar sempre em linha separada (última fila) e com estilo azul (primary).
+Cog responsável pelo comando /configurar painel e pelo fluxo interativo
+utilizando Discord Components v2 (LayoutView, Container, ActionRow) e
+modais com suporte nativo a componentes de upload de arquivo.
 """
+
+import logging
+from typing import Dict, Any, List, Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Optional, Dict, Any, List
 
 import config
-from utils.logger import logger
 from utils.emoji_manager import EmojiManager
 from database.cloud_storage import CloudStorage
 
-# Detecção de suporte nativo a Componentes v2 (discord.py 2.6+)
+logger = logging.getLogger("NiveSalers.TicketPanel")
+
+# Detecção de suporte a Components V2 (discord.py git / 2.6+)
 HAS_COMPONENTS_V2 = hasattr(discord.ui, "LayoutView") and hasattr(discord.ui, "Container")
 
-# Garante a existência da classe FileUpload (Componente Type 19 de Upload em Modals)
-if hasattr(discord.ui, "FileUpload"):
-    FileUploadComponentClass = discord.ui.FileUpload
+if hasattr(discord.ui, "FileUpload") and hasattr(discord.ui, "Label"):
+    FileUploadClass = discord.ui.FileUpload
+    LabelClass = discord.ui.Label
 else:
-    class FileUploadComponentClass(discord.ui.Item):
-        """Implementação do componente de upload de arquivos para modals (Type 19)."""
-        def __init__(self, *, custom_id: str, min_values: int = 0, max_values: int = 1, required: bool = False):
+    class FileUploadClass(discord.ui.Item):
+        """Componente Type 19: File Upload para Modals."""
+        def __init__(self, *, custom_id: str, min_values: int = 1, max_values: int = 1, required: bool = True):
             super().__init__()
             self.custom_id = custom_id
             self.min_values = min_values
@@ -37,21 +39,50 @@ else:
                 "custom_id": self.custom_id,
                 "min_values": self.min_values,
                 "max_values": self.max_values,
-                "required": self.required
+                "required": self.required,
+                "file_types": ["image"]
             }
+
+    class LabelClass(discord.ui.Item):
+        """Componente Type 18: Label envoltório obrigatório para File Upload em Modals."""
+        def __init__(self, *, text: str, component: discord.ui.Item, description: Optional[str] = None):
+            super().__init__()
+            self.text = text
+            self.description = description
+            self.component = component
+
+        @property
+        def width(self) -> int:
+            return 5
+
+        def _has_children(self) -> bool:
+            return True
+
+        def walk_children(self):
+            yield self.component
+
+        def to_component_dict(self) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "type": 18,
+                "label": self.text,
+                "component": self.component.to_component_dict()
+            }
+            if self.description:
+                payload["description"] = self.description
+            return payload
 
 # 10 cores predefinidas para a embed/container do painel
 CORES_DISPONIVEIS = [
-    {"label": "Branco (Padrão)", "value": "FFFFFF", "hex": "#FFFFFF", "int": 0xFFFFFF, "emoji": "⚪", "desc": "Estilo limpo e minimalista"},
-    {"label": "Preto Escuro", "value": "2B2D31", "hex": "#2B2D31", "int": 0x2B2D31, "emoji": "⚫", "desc": "Tema escuro Discord"},
-    {"label": "Azul", "value": "3498DB", "hex": "#3498DB", "int": 0x3498DB, "emoji": "🔵", "desc": "Azul vibrante profissional"},
-    {"label": "Verde", "value": "2ECC71", "hex": "#2ECC71", "int": 0x2ECC71, "emoji": "🟢", "desc": "Verde esmeralda"},
-    {"label": "Vermelho", "value": "E74C3C", "hex": "#E74C3C", "int": 0xE74C3C, "emoji": "🔴", "desc": "Vermelho chamativo"},
-    {"label": "Roxo", "value": "9B59B6", "hex": "#9B59B6", "int": 0x9B59B6, "emoji": "🟣", "desc": "Roxo elegante"},
-    {"label": "Amarelo", "value": "F1C40F", "hex": "#F1C40F", "int": 0xF1C40F, "emoji": "🟡", "desc": "Amarelo dourado"},
-    {"label": "Laranja", "value": "E67E22", "hex": "#E67E22", "int": 0xE67E22, "emoji": "🟠", "desc": "Laranja pôr do sol"},
-    {"label": "Rosa", "value": "E91E63", "hex": "#E91E63", "int": 0xE91E63, "emoji": "🌸", "desc": "Rosa moderno"},
-    {"label": "Ciano", "value": "1ABC9C", "hex": "#1ABC9C", "int": 0x1ABC9C, "emoji": "💎", "desc": "Ciano turquesa"}
+    {"label": "Branco (Padrão)", "value": "FFFFFF", "hex": "#FFFFFF", "int": 0xFFFFFF, "desc": "Estilo limpo e minimalista"},
+    {"label": "Preto Escuro", "value": "2B2D31", "hex": "#2B2D31", "int": 0x2B2D31, "desc": "Tema escuro Discord"},
+    {"label": "Azul", "value": "3498DB", "hex": "#3498DB", "int": 0x3498DB, "desc": "Azul vibrante profissional"},
+    {"label": "Verde", "value": "2ECC71", "hex": "#2ECC71", "int": 0x2ECC71, "desc": "Verde esmeralda"},
+    {"label": "Vermelho", "value": "E74C3C", "hex": "#E74C3C", "int": 0xE74C3C, "desc": "Vermelho chamativo"},
+    {"label": "Roxo", "value": "9B59B6", "hex": "#9B59B6", "int": 0x9B59B6, "desc": "Roxo elegante"},
+    {"label": "Amarelo", "value": "F1C40F", "hex": "#F1C40F", "int": 0xF1C40F, "desc": "Amarelo dourado"},
+    {"label": "Laranja", "value": "E67E22", "hex": "#E67E22", "int": 0xE67E22, "desc": "Laranja pôr do sol"},
+    {"label": "Rosa", "value": "E91E63", "hex": "#E91E63", "int": 0xE91E63, "desc": "Rosa moderno"},
+    {"label": "Ciano", "value": "1ABC9C", "hex": "#1ABC9C", "int": 0x1ABC9C, "desc": "Ciano turquesa"}
 ]
 
 def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
@@ -104,17 +135,17 @@ def format_appearance_panel_text(guild_id: str) -> str:
         f"> {emoji_info} Selecione uma opção para configurar, clicando nos botões abaixo.",
         f"> {emoji_reload} Todas elas irão ser atualizadas automaticamente em paineis existentes.",
         f"> {emoji_reaction} Para melhor interface do painel, você pode usar emojis do Discord.\n",
-        f"{emoji_edit} ``Título:`` {titulo}",
-        f"{emoji_embed} ``Descrição:`` {descricao}",
-        f"{emoji_image} ``Banner:`` {banner}",
-        f"{emoji_image} ``Thumbnail:`` {thumbnail}",
-        f"{emoji_colors} ``Cor da embed:`` {cor}"
+        f"{emoji_edit} Título: {titulo}",
+        f"{emoji_embed} Descrição: {descricao}",
+        f"{emoji_image} Banner: {banner}",
+        f"{emoji_image} Thumbnail: {thumbnail}",
+        f"{emoji_colors} Cor da embed: {cor}"
     ]
     return "\n".join(lines)
 
 
 # =====================================================================
-# MODALS INTERATIVOS COM COMPONENTE DE UPLOAD
+# MODALS INTERATIVOS COM COMPONENTE NATIVO DE UPLOAD (LABEL TIPO 18 + FILE UPLOAD TIPO 19)
 # =====================================================================
 
 class TituloModal(discord.ui.Modal, title="Configurar Título"):
@@ -189,91 +220,169 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
 
 
 class BannerModal(discord.ui.Modal, title="Configurar Banner"):
-    """Modal com componente de upload para a imagem do banner."""
+    """Modal com componente nativo de upload para a imagem do banner."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__()
         self.guild_id = guild_id
         self.user_id = user_id
 
-        # Componente de upload para a imagem do banner
-        self.file_upload = FileUploadComponentClass(
+        self.file_upload = FileUploadClass(
             custom_id="banner_file_upload",
-            min_values=0,
+            min_values=1,
             max_values=1,
-            required=False
+            required=True
         )
-        self.add_item(self.file_upload)
+        self.label_wrapper = LabelClass(
+            text="Upload do Banner",
+            description="Selecione o arquivo da imagem do banner para carregar",
+            component=self.file_upload
+        )
+        self.add_item(self.label_wrapper)
+
+    def to_components(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": 18,
+                "label": "Upload do Banner",
+                "description": "Selecione o arquivo da imagem do banner para carregar",
+                "component": {
+                    "type": 19,
+                    "custom_id": "banner_file_upload",
+                    "min_values": 1,
+                    "max_values": 1,
+                    "required": True,
+                    "file_types": ["image"]
+                }
+            }
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "custom_id": self.custom_id,
+            "components": self.to_components()
+        }
 
     async def on_submit(self, interaction: discord.Interaction):
         novo_banner = None
 
-        # 1. Tenta recuperar arquivo do componente de upload
-        if hasattr(self.file_upload, "values") and self.file_upload.values:
+        # 1. Recupera via resolved attachments do payload de interação da API do Discord
+        resolved_attachments = interaction.data.get("resolved", {}).get("attachments", {})
+        if resolved_attachments:
+            first_att = next(iter(resolved_attachments.values()))
+            novo_banner = first_att.get("url")
+
+        # 2. Varredura recursiva nos components do interaction.data
+        if not novo_banner:
+            for comp_wrapper in interaction.data.get("components", []):
+                inner = comp_wrapper.get("component") if comp_wrapper.get("type") == 18 else comp_wrapper
+                if inner and inner.get("type") == 19:
+                    values = inner.get("values", [])
+                    if values and resolved_attachments:
+                        att_id = str(values[0])
+                        if att_id in resolved_attachments:
+                            novo_banner = resolved_attachments[att_id].get("url")
+
+        # 3. Recupera via atributo values da classe se populado pelo discord.py
+        if not novo_banner and hasattr(self.file_upload, "values") and self.file_upload.values:
             att = self.file_upload.values[0]
             novo_banner = getattr(att, "url", None) or getattr(att, "proxy_url", None) or str(att)
 
-        # 2. Tenta recuperar dos anexos resolvidos da interação (Discord API)
-        if not novo_banner:
-            resolved_attachments = interaction.data.get("resolved", {}).get("attachments", {})
-            if resolved_attachments:
-                first_att = next(iter(resolved_attachments.values()))
-                novo_banner = first_att.get("url")
+        if novo_banner:
+            cfg = CloudStorage.get_guild_config(str(self.guild_id))
+            cfg["painel"]["banner_url"] = novo_banner
+            await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+            logger.info(f"Banner atualizado via componente de upload por {interaction.user}: {novo_banner}")
 
-        cfg = CloudStorage.get_guild_config(str(self.guild_id))
-        cfg["painel"]["banner_url"] = novo_banner or "Não definido"
-        await CloudStorage.save_guild_config(str(self.guild_id), cfg)
-
-        logger.info(f"Banner atualizado via componente de upload por {interaction.user}: {novo_banner}")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        logger.error(f"Erro no modal de banner: {error}", exc_info=True)
+        logger.error(f"Erro no modal de upload do banner: {error}", exc_info=True)
         if not interaction.response.is_done():
-            await interaction.response.send_message(f"Ocorreu um erro ao salvar o banner: {error}", ephemeral=True)
+            await interaction.response.send_message(f"Ocorreu um erro no upload do banner: {error}", ephemeral=True)
 
 
 class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
-    """Modal com componente de upload para a imagem da thumbnail."""
+    """Modal com componente nativo de upload para a imagem da thumbnail."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__()
         self.guild_id = guild_id
         self.user_id = user_id
 
-        # Componente de upload para a imagem da miniatura
-        self.file_upload = FileUploadComponentClass(
+        self.file_upload = FileUploadClass(
             custom_id="thumbnail_file_upload",
-            min_values=0,
+            min_values=1,
             max_values=1,
-            required=False
+            required=True
         )
-        self.add_item(self.file_upload)
+        self.label_wrapper = LabelClass(
+            text="Upload da Thumbnail",
+            description="Selecione o arquivo da imagem da thumbnail para carregar",
+            component=self.file_upload
+        )
+        self.add_item(self.label_wrapper)
+
+    def to_components(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": 18,
+                "label": "Upload da Thumbnail",
+                "description": "Selecione o arquivo da imagem da thumbnail para carregar",
+                "component": {
+                    "type": 19,
+                    "custom_id": "thumbnail_file_upload",
+                    "min_values": 1,
+                    "max_values": 1,
+                    "required": True,
+                    "file_types": ["image"]
+                }
+            }
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "custom_id": self.custom_id,
+            "components": self.to_components()
+        }
 
     async def on_submit(self, interaction: discord.Interaction):
         nova_thumb = None
 
-        # 1. Tenta recuperar arquivo do componente de upload
-        if hasattr(self.file_upload, "values") and self.file_upload.values:
+        # 1. Recupera via resolved attachments do payload de interação da API do Discord
+        resolved_attachments = interaction.data.get("resolved", {}).get("attachments", {})
+        if resolved_attachments:
+            first_att = next(iter(resolved_attachments.values()))
+            nova_thumb = first_att.get("url")
+
+        # 2. Varredura recursiva nos components do interaction.data
+        if not nova_thumb:
+            for comp_wrapper in interaction.data.get("components", []):
+                inner = comp_wrapper.get("component") if comp_wrapper.get("type") == 18 else comp_wrapper
+                if inner and inner.get("type") == 19:
+                    values = inner.get("values", [])
+                    if values and resolved_attachments:
+                        att_id = str(values[0])
+                        if att_id in resolved_attachments:
+                            nova_thumb = resolved_attachments[att_id].get("url")
+
+        # 3. Recupera via atributo values da classe se populado pelo discord.py
+        if not nova_thumb and hasattr(self.file_upload, "values") and self.file_upload.values:
             att = self.file_upload.values[0]
             nova_thumb = getattr(att, "url", None) or getattr(att, "proxy_url", None) or str(att)
 
-        # 2. Tenta recuperar dos anexos resolvidos da interação (Discord API)
-        if not nova_thumb:
-            resolved_attachments = interaction.data.get("resolved", {}).get("attachments", {})
-            if resolved_attachments:
-                first_att = next(iter(resolved_attachments.values()))
-                nova_thumb = first_att.get("url")
+        if nova_thumb:
+            cfg = CloudStorage.get_guild_config(str(self.guild_id))
+            cfg["painel"]["thumbnail_url"] = nova_thumb
+            await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+            logger.info(f"Thumbnail atualizada via componente de upload por {interaction.user}: {nova_thumb}")
 
-        cfg = CloudStorage.get_guild_config(str(self.guild_id))
-        cfg["painel"]["thumbnail_url"] = nova_thumb or "Não definido"
-        await CloudStorage.save_guild_config(str(self.guild_id), cfg)
-
-        logger.info(f"Thumbnail atualizada via componente de upload por {interaction.user}: {nova_thumb}")
         await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        logger.error(f"Erro no modal de thumbnail: {error}", exc_info=True)
+        logger.error(f"Erro no modal de upload da thumbnail: {error}", exc_info=True)
         if not interaction.response.is_done():
-            await interaction.response.send_message(f"Ocorreu um erro ao salvar a thumbnail: {error}", ephemeral=True)
+            await interaction.response.send_message(f"Ocorreu um erro no upload da thumbnail: {error}", ephemeral=True)
 
 
 # =====================================================================
@@ -301,7 +410,7 @@ class DescricaoButton(discord.ui.Button):
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Descrição",
-            emoji=resolve_partial_emoji("edit", "✏️"),
+            emoji=resolve_partial_emoji("embed", "📄"),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_aparencia_descricao",
             row=0
@@ -318,7 +427,7 @@ class BannerButton(discord.ui.Button):
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Banner",
-            emoji=resolve_partial_emoji("edit", "✏️"),
+            emoji=resolve_partial_emoji("image", "🖼️"),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_aparencia_banner",
             row=0
@@ -327,7 +436,7 @@ class BannerButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Banner button clicado por {interaction.user} (abrindo modal de upload)")
+        logger.info(f"Banner button clicado por {interaction.user} (abrindo modal com componente de upload)")
         await interaction.response.send_modal(BannerModal(self.guild_id or (interaction.guild_id or 0), interaction.user.id))
 
 
@@ -335,7 +444,7 @@ class ThumbnailButton(discord.ui.Button):
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Thumbnail",
-            emoji=resolve_partial_emoji("edit", "✏️"),
+            emoji=resolve_partial_emoji("image", "🖼️"),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_aparencia_thumbnail",
             row=1
@@ -344,7 +453,7 @@ class ThumbnailButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Thumbnail button clicado por {interaction.user} (abrindo modal de upload)")
+        logger.info(f"Thumbnail button clicado por {interaction.user} (abrindo modal com componente de upload)")
         await interaction.response.send_modal(ThumbnailModal(self.guild_id or (interaction.guild_id or 0), interaction.user.id))
 
 
@@ -352,7 +461,7 @@ class CorButton(discord.ui.Button):
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Cor da embed",
-            emoji=resolve_partial_emoji("edit", "✏️"),
+            emoji=resolve_partial_emoji("colors", "🎨"),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_aparencia_cor",
             row=1
@@ -361,19 +470,18 @@ class CorButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Cor button clicado por {interaction.user}")
-        await render_cor_panel(interaction, self.guild_id or (interaction.guild_id or 0), interaction.user.id, is_edit=True)
+        logger.info(f"Cor da embed button clicado por {interaction.user} (abrindo painel de cores)")
+        await render_cor_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id or interaction.user.id, is_edit=True)
 
 
 class VoltarParaPrincipalButton(discord.ui.Button):
-    """Botão Voltar: sempre em linha separada (última fila) e com cor azul (primary)."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Voltar",
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,  # Sempre Azul (Primary)
             custom_id="btn_aparencia_voltar",
-            row=2  # Última fila separada
+            row=2  # Última fila separada exclusivamente para o botão Voltar
         )
         self.guild_id = guild_id
         self.user_id = user_id
@@ -384,21 +492,27 @@ class VoltarParaPrincipalButton(discord.ui.Button):
 
 
 # =====================================================================
-# SELECT MENUS & VIEWS DE CORES
+# SELECT MENUS & VIEWS DE CORES COM EMOJI <:colors:1561906164810125362>
 # =====================================================================
 
 class CorEmbedSelect(discord.ui.Select):
-    """Select Menu contendo as 10 cores predefinidas para a embed."""
+    """
+    Select Menu contendo as 10 cores predefinidas para a embed.
+    Todas as opções possuem obrigatoriamente o emoji <:colors:1561906164810125362>.
+    """
     def __init__(self, guild_id: int, user_id: int):
         self.guild_id = guild_id
         self.user_id = user_id
+
+        # Emoji <:colors:1561906164810125362> em todas as 10 opções
+        emoji_colors = resolve_partial_emoji("colors", "🎨")
 
         options = [
             discord.SelectOption(
                 label=cor["label"],
                 value=cor["value"],
                 description=cor["desc"],
-                emoji=cor["emoji"]
+                emoji=emoji_colors
             )
             for cor in CORES_DISPONIVEIS
         ]
@@ -427,20 +541,23 @@ class CorEmbedSelect(discord.ui.Select):
 
 
 class VoltarParaAparenciaButton(discord.ui.Button):
-    """Botão Voltar: sempre em linha separada (última fila) e com cor azul (primary)."""
+    """
+    Botão Voltar do painel de cores:
+    Chama-se apenas 'Voltar', sempre em linha separada (última fila) e sempre azul (primary).
+    """
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
-            label="Voltar para Aparência",
+            label="Voltar",  # Chamado apenas 'Voltar' e nada mais
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,  # Sempre Azul (Primary)
-            custom_id="btn_cor_voltar_aparencia",
+            custom_id="btn_cor_voltar",
             row=1  # Última fila separada da ActionRow do select
         )
         self.guild_id = guild_id
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Voltar para Aparência clicado por {interaction.user}")
+        logger.info(f"Voltar clicado por {interaction.user} no painel de cores")
         await render_appearance_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id or interaction.user.id, is_edit=True)
 
 
@@ -467,7 +584,7 @@ class ConfigPainelSelect(discord.ui.Select):
             discord.SelectOption(
                 label="Configurações do painel",
                 value="configuracoes",
-                description="Defina canais, categorias, cargos e regras de atendimento",
+                description="Defina canais, categorias e permissões do atendimento",
                 emoji=emoji_config
             )
         ]
@@ -477,51 +594,50 @@ class ConfigPainelSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="nivesalers_config_painel_select"
+            custom_id="select_config_painel_principal"
         )
 
     async def callback(self, interaction: discord.Interaction):
-        escolha = self.values[0] if self.values else ""
+        escolha = self.values[0]
+        logger.info(f"Opção '{escolha}' selecionada por {interaction.user}")
 
         if escolha == "aparencia":
-            gid = self.guild_id or (interaction.guild_id or 0)
-            await render_appearance_panel(interaction, gid, interaction.user.id, is_edit=True)
-            logger.info(f"Painel de aparência acessado por {interaction.user}")
-
+            await render_appearance_panel(
+                interaction,
+                self.guild_id or (interaction.guild_id or 0),
+                self.user_id or interaction.user.id,
+                is_edit=True
+            )
         elif escolha == "configuracoes":
-            logger.info(f"Opção 'Configurações do painel' selecionada por {interaction.user} (sem ação por enquanto).")
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(
+                "Configurações do painel selecionadas. (Módulo em desenvolvimento)",
+                ephemeral=True
+            )
 
 
 # =====================================================================
-# CONSTRUTORES DE COMPONENTES V2 (LAYOUTVIEW & CONTAINER TYPE 17)
+# CONSTRUTORES DE LAYOUT COMPONENTS V2 (CONTAINER TYPE 17)
 # =====================================================================
 
 def build_v2_main_layout(guild_id: int, user_id: int):
-    """
-    Constrói a árvore de LayoutView com Container e ActionRow para o painel principal.
-    Garante que o Select Menu esteja rigorosamente dentro do container de layout.
-    """
+    """Constrói a árvore de LayoutView com Container para o painel principal."""
     if not HAS_COMPONENTS_V2:
         return None
 
     try:
         text = format_main_panel_text()
         layout_view = discord.ui.LayoutView(timeout=None)
-
-        # ActionRow contendo o Select Menu dentro do container
-        action_row = discord.ui.ActionRow(ConfigPainelSelect(guild_id, user_id))
+        select = ConfigPainelSelect(guild_id, user_id)
+        row = discord.ui.ActionRow(select)
 
         separator_spacing = getattr(discord, "SeparatorSpacing", None)
         spacing_arg = separator_spacing.small if separator_spacing else None
         separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
 
-        # Container V2 (Type 17) agrupando texto, divisor e action row
         container = discord.ui.Container(
             discord.ui.TextDisplay(text),
             separator,
-            action_row,
+            row,
             accent_colour=config.EMBED_COLOR_DEFAULT
         )
         layout_view.add_item(container)
@@ -533,7 +649,7 @@ def build_v2_main_layout(guild_id: int, user_id: int):
 
 def build_v2_appearance_layout(guild_id: int, user_id: int):
     """
-    Constrói a árvore de LayoutView com Container e ActionRows para o painel de aparência.
+    Constrói a árvore de LayoutView com Container para o painel de aparência.
     Botão Voltar estritamente na última linha separada e em azul.
     """
     if not HAS_COMPONENTS_V2:
@@ -547,20 +663,20 @@ def build_v2_appearance_layout(guild_id: int, user_id: int):
 
         layout_view = discord.ui.LayoutView(timeout=None)
 
-        # Linha 1 de botões
+        # Linha 1 (Título, Descrição, Banner)
         row1 = discord.ui.ActionRow(
             TituloButton(guild_id, user_id),
             DescricaoButton(guild_id, user_id),
             BannerButton(guild_id, user_id)
         )
 
-        # Linha 2 de botões
+        # Linha 2 (Thumbnail, Cor da embed)
         row2 = discord.ui.ActionRow(
             ThumbnailButton(guild_id, user_id),
             CorButton(guild_id, user_id)
         )
 
-        # Linha 3 (Última fila separada exclusivamente para o botão Voltar)
+        # Linha 3 (Última fila separada exclusivamente para o botão Voltar em azul)
         row_voltar = discord.ui.ActionRow(
             VoltarParaPrincipalButton(guild_id, user_id)
         )
@@ -569,7 +685,6 @@ def build_v2_appearance_layout(guild_id: int, user_id: int):
         spacing_arg = separator_spacing.small if separator_spacing else None
         separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
 
-        # Container V2 (Type 17) contendo todos os layouts
         container = discord.ui.Container(
             discord.ui.TextDisplay(text),
             separator,
@@ -588,7 +703,7 @@ def build_v2_appearance_layout(guild_id: int, user_id: int):
 def build_v2_cor_layout(guild_id: int, user_id: int):
     """
     Constrói a árvore de LayoutView com Container para o painel de cores.
-    Botão Voltar para Aparência estritamente na última linha separada e em azul.
+    Botão Voltar estritamente na última linha separada, chamado 'Voltar' e em azul.
     """
     if not HAS_COMPONENTS_V2:
         return None
@@ -654,13 +769,13 @@ async def render_main_panel(interaction: discord.Interaction, guild_id: int, use
         if not interaction.response.is_done():
             await interaction.response.edit_message(embed=embed, view=view)
         else:
-            await interaction.edit_original_response(embed=embed, view=view)
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
     else:
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 async def render_appearance_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
-    """Renderiza o painel de aparência com Componentes V2 (Container + Botões nos Layouts)."""
+    """Renderiza o painel de aparência com Componentes V2 (Container + botões)."""
     v2_view = build_v2_appearance_layout(guild_id, user_id)
     if v2_view is not None:
         try:
@@ -668,17 +783,13 @@ async def render_appearance_panel(interaction: discord.Interaction, guild_id: in
                 await interaction.response.edit_message(view=v2_view)
             else:
                 await interaction.response.send_message(view=v2_view, ephemeral=True)
-            logger.info("Painel de aparência enviado com Componentes V2 (Container com botões internos)")
+            logger.info("Painel de aparência enviado com Componentes V2 (Container)")
             return
         except Exception as e:
-            logger.warning(f"Aviso ao enviar LayoutView v2 de aparência: {e}. Usando fallback.")
+            logger.warning(f"Aviso ao enviar LayoutView v2: {e}. Usando fallback.")
 
-    gid_str = str(guild_id or (interaction.guild_id or "direct"))
-    text = format_appearance_panel_text(gid_str)
-    cfg = CloudStorage.get_guild_config(gid_str)
-    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-
-    embed = discord.Embed(description=text, color=cor_embed)
+    text = format_appearance_panel_text(str(guild_id))
+    embed = discord.Embed(description=text, color=config.EMBED_COLOR_DEFAULT)
     view = discord.ui.View(timeout=None)
     view.add_item(TituloButton(guild_id, user_id))
     view.add_item(DescricaoButton(guild_id, user_id))
@@ -691,13 +802,13 @@ async def render_appearance_panel(interaction: discord.Interaction, guild_id: in
         if not interaction.response.is_done():
             await interaction.response.edit_message(embed=embed, view=view)
         else:
-            await interaction.edit_original_response(embed=embed, view=view)
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
     else:
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
-    """Renderiza o painel de cores com Componentes V2 (Container + Select de 10 cores)."""
+    """Renderiza o painel de cores com Componentes V2 (Container + Select de 10 cores com emoji <:colors:...>)."""
     v2_view = build_v2_cor_layout(guild_id, user_id)
     if v2_view is not None:
         try:
@@ -708,19 +819,18 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
             logger.info("Painel de cores enviado com Componentes V2 (Container)")
             return
         except Exception as e:
-            logger.warning(f"Aviso ao enviar LayoutView v2 de cores: {e}. Usando fallback.")
+            logger.warning(f"Aviso ao enviar LayoutView v2: {e}. Usando fallback.")
 
-    gid_str = str(guild_id or (interaction.guild_id or "direct"))
+    gid_str = str(guild_id or "direct")
     cfg = CloudStorage.get_guild_config(gid_str)
-    cor_atual_int = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
 
     text = (
         "## Configurar Cor da embed do painel de atendimento.\n\n"
         f"{emoji_info} Selecione a cor desejada usando o select menu abaixo."
     )
-
-    embed = discord.Embed(description=text, color=cor_atual_int)
+    embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
     view.add_item(CorEmbedSelect(guild_id, user_id))
     view.add_item(VoltarParaAparenciaButton(guild_id, user_id))
@@ -729,37 +839,45 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
         if not interaction.response.is_done():
             await interaction.response.edit_message(embed=embed, view=view)
         else:
-            await interaction.edit_original_response(embed=embed, view=view)
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
     else:
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 # =====================================================================
-# COMANDO SLASH /configurar painel
+# COG PRINCIPAL
 # =====================================================================
 
-class ConfigurarGroup(app_commands.Group):
-    """Grupo de comandos /configurar"""
-    def __init__(self):
-        super().__init__(name="configurar", description="Configurações do sistema de atendimento NiveSalers")
+class TicketPanelCog(commands.Cog, name="PainelConfig"):
+    """Cog responsável pelos comandos e interações do painel de configuração."""
 
-    @app_commands.command(
-        name="painel",
-        description="Abre o painel de configuração dos painéis de atendimento com Componentes V2."
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def painel(self, interaction: discord.Interaction):
-        """Abre o painel com Componentes V2 e Container de Layout."""
-        guild_id = interaction.guild_id or 0
-        CloudStorage.get_guild_config(str(guild_id))
-        await render_main_panel(interaction, guild_id, interaction.user.id, is_edit=False)
-
-
-class TicketPanelCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.configurar_group = ConfigurarGroup()
-        self.bot.tree.add_command(self.configurar_group)
+        logger.info("TicketPanelCog carregado com sucesso")
+
+    @app_commands.command(
+        name="configurar",
+        description="Abre o painel de configuração do sistema de atendimento"
+    )
+    @app_commands.describe(opcao="Opção do painel que deseja configurar (ex: painel)")
+    @app_commands.choices(opcao=[
+        app_commands.Choice(name="painel", value="painel")
+    ])
+    async def configurar_command(self, interaction: discord.Interaction, opcao: app_commands.Choice[str]):
+        """Comando de barra /configurar painel"""
+        if opcao.value != "painel":
+            await interaction.response.send_message(
+                f"Opção '{opcao.value}' não reconhecida.",
+                ephemeral=True
+            )
+            return
+
+        guild_id = interaction.guild_id or 0
+        user_id = interaction.user.id
+        logger.info(f"Comando /configurar painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
+
+        await render_main_panel(interaction, guild_id, user_id, is_edit=False)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketPanelCog(bot))
