@@ -1,5 +1,4 @@
 """Comando /ping do NiveSalers."""
-import time
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -11,7 +10,6 @@ class Ping(commands.Cog):
 
     @app_commands.command(name="ping", description="Verifica a latência e o estado do NiveSalers.")
     async def ping(self, interaction: discord.Interaction):
-        started = time.perf_counter()
         ws_ms = round(self.bot.latency * 1000, 1)
         interaction_ms = round((discord.utils.utcnow() - interaction.created_at).total_seconds() * 1000, 1)
 
