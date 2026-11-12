@@ -845,38 +845,35 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
 
 
 # =====================================================================
-# COG PRINCIPAL
+# COMANDO SLASH /configurar painel (SEM PARÂMETRO)
 # =====================================================================
+
+class ConfigurarGroup(app_commands.Group):
+    """Grupo de comandos /configurar"""
+    def __init__(self):
+        super().__init__(name="configurar", description="Configurações do sistema de atendimento NiveSalers")
+
+    @app_commands.command(
+        name="painel",
+        description="Abre o painel de configuração dos painéis de atendimento com Componentes V2."
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def painel(self, interaction: discord.Interaction):
+        """Abre o painel com Componentes V2 e Container de Layout."""
+        guild_id = interaction.guild_id or 0
+        user_id = interaction.user.id
+        logger.info(f"Comando /configurar painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
+        await render_main_panel(interaction, guild_id, user_id, is_edit=False)
+
 
 class TicketPanelCog(commands.Cog, name="PainelConfig"):
     """Cog responsável pelos comandos e interações do painel de configuração."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.configurar_group = ConfigurarGroup()
+        self.bot.tree.add_command(self.configurar_group)
         logger.info("TicketPanelCog carregado com sucesso")
-
-    @app_commands.command(
-        name="configurar",
-        description="Abre o painel de configuração do sistema de atendimento"
-    )
-    @app_commands.describe(opcao="Opção do painel que deseja configurar (ex: painel)")
-    @app_commands.choices(opcao=[
-        app_commands.Choice(name="painel", value="painel")
-    ])
-    async def configurar_command(self, interaction: discord.Interaction, opcao: app_commands.Choice[str]):
-        """Comando de barra /configurar painel"""
-        if opcao.value != "painel":
-            await interaction.response.send_message(
-                f"Opção '{opcao.value}' não reconhecida.",
-                ephemeral=True
-            )
-            return
-
-        guild_id = interaction.guild_id or 0
-        user_id = interaction.user.id
-        logger.info(f"Comando /configurar painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
-
-        await render_main_panel(interaction, guild_id, user_id, is_edit=False)
 
 
 async def setup(bot: commands.Bot):
