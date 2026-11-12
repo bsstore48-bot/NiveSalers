@@ -72,7 +72,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 async def load_extensions():
     """Carrega as cogs do bot."""
-    cogs = ["cogs.ticket_panel", "cogs.ping"]
+    cogs = ["cogs.ticket_panel"]
     for cog in cogs:
         try:
             await bot.load_extension(cog)
