@@ -2819,6 +2819,24 @@ class CanaisConfigButton(discord.ui.Button):
         )
 
 
+class CargosConfigButton(discord.ui.Button):
+    """Botão Cargos do painel /configurações (ainda sem ação)."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Cargos",
+            emoji=resolve_partial_emoji("cargo", "🛡️"),
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_configuracoes_cargos",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+
 def build_v2_canais_config_layout(guild_id: int, user_id: int):
     """Constrói o painel V2 de Canais (/configurações -> Canais) com 3 ChannelSelects e botão Voltar."""
     if not HAS_COMPONENTS_V2:
@@ -2978,7 +2996,10 @@ def build_v2_configuracoes_layout(guild_id: int, user_id: int):
         container_items.extend([
             discord.ui.TextDisplay(text),
             separator,
-            discord.ui.ActionRow(CanaisConfigButton(guild_id, user_id)),
+            discord.ui.ActionRow(
+                CanaisConfigButton(guild_id, user_id),
+                CargosConfigButton(guild_id, user_id),
+            ),
         ])
 
         container = discord.ui.Container(
@@ -3027,6 +3048,7 @@ async def render_configuracoes_panel(
     embed.set_image(url=MAIN_PANEL_BANNER_URL)
     view = discord.ui.View(timeout=None)
     view.add_item(CanaisConfigButton(guild_id, user_id))
+    view.add_item(CargosConfigButton(guild_id, user_id))
     if is_edit:
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view)
