@@ -175,6 +175,18 @@ def format_settings_panel_text() -> str:
     return "\n".join(lines)
 
 
+def format_business_hours_panel_text() -> str:
+    """Retorna o texto do painel de horário de atendimento."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+
+    lines = [
+        f"## {emoji_bot} Horário de atendimento\n",
+        f"> {emoji_info} Configure o horário em que os membros podem abrir tickets para serem atendidos."
+    ]
+    return "\n".join(lines)
+
+
 def format_categories_panel_text(guild_id: str) -> str:
     """Retorna o texto do painel de categorias com as categorias cadastradas no servidor."""
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
@@ -805,6 +817,29 @@ class CategoriasButton(discord.ui.Button):
         )
 
 
+class HorarioAtendimentoButton(discord.ui.Button):
+    """Botão Horário de atendimento do painel de configurações do sistema."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Horário de atendimento",
+            emoji=resolve_partial_emoji("clock", "🕒"),
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_sistema_horario_atendimento",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Horário de atendimento clicado por {interaction.user} (abrindo painel de horário)")
+        await render_business_hours_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
 class CriarCategoriaButton(discord.ui.Button):
     """Botão verde Criar categoria (abre o modal de criação)."""
     def __init__(self, guild_id: int, user_id: int):
@@ -872,13 +907,13 @@ class EditarCategoriaButton(discord.ui.Button):
 
 
 class VoltarParaSistemaButton(discord.ui.Button):
-    """Botão Voltar do painel de categorias: sempre azul na última linha separada."""
-    def __init__(self, guild_id: int, user_id: int):
+    """Botão Voltar dos subpainéis do sistema: sempre azul na última linha separada."""
+    def __init__(self, guild_id: int, user_id: int, custom_id: str = "btn_categorias_voltar"):
         super().__init__(
             label="Voltar",
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,  # Sempre Azul (Primary)
-            custom_id="btn_categorias_voltar",
+            custom_id=custom_id,
             row=1  # Última fila separada
         )
         self.guild_id = guild_id
@@ -1345,7 +1380,8 @@ def build_v2_settings_layout(guild_id: int, user_id: int):
         layout_view = discord.ui.LayoutView(timeout=None)
 
         row1 = discord.ui.ActionRow(
-            CategoriasButton(guild_id, user_id)
+            CategoriasButton(guild_id, user_id),
+            HorarioAtendimentoButton(guild_id, user_id)
         )
         row_voltar = discord.ui.ActionRow(
             VoltarParaPrincipalButton(guild_id, user_id, row=1, custom_id="btn_sistema_voltar")
@@ -1366,6 +1402,42 @@ def build_v2_settings_layout(guild_id: int, user_id: int):
         return layout_view
     except Exception as e:
         logger.warning(f"Erro ao instanciar LayoutView v2 de configurações do sistema: {e}")
+        return None
+
+
+def build_v2_business_hours_layout(guild_id: int, user_id: int):
+    """
+    Constrói a árvore de LayoutView com Container para o painel de Horário de atendimento.
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+        text = format_business_hours_panel_text()
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        row_voltar = discord.ui.ActionRow(
+            VoltarParaSistemaButton(guild_id, user_id, custom_id="btn_horario_voltar")
+        )
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            row_voltar,
+            accent_colour=cor_embed
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de horário de atendimento: {e}")
         return None
 
 
@@ -1631,7 +1703,42 @@ async def render_settings_panel(interaction: discord.Interaction, guild_id: int,
     embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
     view.add_item(CategoriasButton(guild_id, user_id))
+    view.add_item(HorarioAtendimentoButton(guild_id, user_id))
     view.add_item(VoltarParaPrincipalButton(guild_id, user_id, row=1, custom_id="btn_sistema_voltar"))
+
+    if is_edit:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def render_business_hours_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+    """Renderiza o painel de Horário de atendimento com Componentes V2 (Container + Voltar)."""
+    v2_view = build_v2_business_hours_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel de horário de atendimento enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de horário de atendimento: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    text = format_business_hours_panel_text()
+    embed = discord.Embed(description=text, color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    view.add_item(VoltarParaSistemaButton(guild_id, user_id, custom_id="btn_horario_voltar"))
 
     if is_edit:
         if not interaction.response.is_done():
