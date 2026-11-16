@@ -5,6 +5,7 @@ Garante que reinícios, atualizações e rebuilds não percam as configurações
 """
 import os
 import json
+import time
 import base64
 import asyncio
 from typing import Dict, Any, Optional
@@ -182,9 +183,10 @@ class CloudStorage:
         if not config.HF_DB_TOKEN or not config.HF_DB_REPO:
             return
 
-        url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/raw/main/cloud_backup.json"
+        url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/raw/main/cloud_backup.json?t={int(time.time())}"
         headers = {
             "Authorization": f"Bearer {config.HF_DB_TOKEN}",
+            "Cache-Control": "no-cache",
             "User-Agent": "NiveSalers-Bot"
         }
 
@@ -249,15 +251,21 @@ class CloudStorage:
                         })
                     ]) + "\n"
 
-                    try:
-                        async with session.post(url, headers=headers, data=ndjson_payload.encode("utf-8")) as resp:
-                            if resp.status in (200, 201):
-                                logger.info(f"Configurações persistidas no Hugging Face Dataset ({config.HF_DB_REPO}).")
-                            else:
-                                err_txt = await resp.text()
-                                logger.error(f"Erro ao salvar no HF Dataset ({resp.status}): {err_txt[:200]}")
-                    except Exception as e:
-                        logger.error(f"Falha de rede ao salvar no HF Dataset: {e}")
+                    saved = False
+                    for attempt in range(2):
+                        try:
+                            async with session.post(url, headers=headers, data=ndjson_payload.encode("utf-8")) as resp:
+                                if resp.status in (200, 201):
+                                    logger.info(f"Configurações persistidas no Hugging Face Dataset ({config.HF_DB_REPO}).")
+                                    saved = True
+                                    break
+                                else:
+                                    err_txt = await resp.text()
+                                    logger.error(f"Erro ao salvar no HF Dataset (tentativa {attempt+1}, {resp.status}): {err_txt[:200]}")
+                        except Exception as e:
+                            logger.error(f"Falha de rede ao salvar no HF Dataset (tentativa {attempt+1}): {e}")
+                        if not saved and attempt == 0:
+                            await asyncio.sleep(1.0)
         finally:
             cls._hf_worker_running = False
             if cls._hf_dirty:
