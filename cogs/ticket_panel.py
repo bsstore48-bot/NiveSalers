@@ -73,7 +73,7 @@ else:
                 payload["description"] = self.description
             return payload
 
-MAIN_PANEL_BANNER_URL = "https://raw.githubusercontent.com/bsstore48-bot/NiveSalers/main/assets/banners/painel_principal.png?v=2"
+MAIN_PANEL_BANNER_URL = "https://raw.githubusercontent.com/bsstore48-bot/NiveSalers/main/assets/banners/painel_principal_v2.png"
 
 # 10 cores predefinidas para a embed/container do painel
 CORES_DISPONIVEIS = [
