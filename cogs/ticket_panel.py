@@ -2354,6 +2354,48 @@ class TicketControlSelect(discord.ui.Select):
         )
 
 
+class NotificarEquipeButton(discord.ui.Button):
+    """Botão para quem abriu o ticket notificar todos os cargos permitidos."""
+    def __init__(self, thread_id: int, guild_id: int):
+        super().__init__(
+            label="Notificar equipe",
+            emoji=resolve_partial_emoji("announcement", "📢"),
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_ticket_notificar_equipe",
+            row=1,
+        )
+        self.thread_id = thread_id
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await handle_ticket_notify_staff(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.thread_id or (interaction.channel_id or 0),
+        )
+
+
+class SairAtendimentoButton(discord.ui.Button):
+    """Botão para quem abriu o ticket sair forçado do tópico."""
+    def __init__(self, thread_id: int, guild_id: int):
+        super().__init__(
+            label="Sair do atendimento",
+            emoji=resolve_partial_emoji("back", "🚪"),
+            style=discord.ButtonStyle.danger,
+            custom_id="btn_ticket_sair_atendimento",
+            row=1,
+        )
+        self.thread_id = thread_id
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await handle_ticket_leave_opener(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.thread_id or (interaction.channel_id or 0),
+        )
+
+
 def build_v2_ticket_welcome_layout(
     user_mention: str,
     cat_nome: str,
@@ -2364,7 +2406,7 @@ def build_v2_ticket_welcome_layout(
     thread_id: int = 0,
     guild_id: int = 0,
 ):
-    """Constrói o painel inicial em Components V2 dentro do tópico privado do ticket com Select Menu de 4 ações."""
+    """Constrói o painel inicial em Components V2 dentro do tópico privado do ticket com Select Menu + 2 botões."""
     if not HAS_COMPONENTS_V2:
         return None
     try:
@@ -2387,6 +2429,10 @@ def build_v2_ticket_welcome_layout(
             discord.ui.TextDisplay(text),
             separator,
             discord.ui.ActionRow(TicketControlSelect(thread_id=thread_id, guild_id=guild_id)),
+            discord.ui.ActionRow(
+                NotificarEquipeButton(thread_id=thread_id, guild_id=guild_id),
+                SairAtendimentoButton(thread_id=thread_id, guild_id=guild_id),
+            ),
             accent_colour=accent_color
         )
         layout_view.add_item(container)
@@ -2599,12 +2645,193 @@ async def _reset_ticket_panel_select(
             )
             fb_view = discord.ui.View(timeout=None)
             fb_view.add_item(TicketControlSelect(thread_id=thread_id, guild_id=guild_id))
+            fb_view.add_item(NotificarEquipeButton(thread_id=thread_id, guild_id=guild_id))
+            fb_view.add_item(SairAtendimentoButton(thread_id=thread_id, guild_id=guild_id))
             await message.edit(embed=discord.Embed(description=fallback_txt, color=accent_color), view=fb_view)
     except Exception as e:
         logger.debug(f"Aviso ao resetar Select Menu do ticket {thread_id}: {e}")
 
 
 _handled_ticket_action_interactions: List[int] = []
+
+
+async def handle_ticket_notify_staff(
+    interaction: discord.Interaction,
+    guild_id: int = 0,
+    thread_id: int = 0,
+) -> None:
+    """Notifica todos os cargos permitidos do ticket (exclusivo para quem abriu o ticket)."""
+    if interaction.id in _handled_ticket_action_interactions:
+        return
+    _handled_ticket_action_interactions.append(interaction.id)
+    if len(_handled_ticket_action_interactions) > 200:
+        del _handled_ticket_action_interactions[:100]
+
+    gid_int = guild_id or (interaction.guild_id or 0)
+    gid_str = str(gid_int or "direct")
+    tid_int = thread_id or (interaction.channel_id or 0)
+    tid_str = str(tid_int)
+
+    cfg = CloudStorage.get_guild_config(gid_str)
+    ticket_data = cfg.get("tickets_ativos", {}).get(tid_str)
+    if not isinstance(ticket_data, dict):
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                ephemeral=True
+            )
+        return
+
+    owner_id = str(ticket_data.get("owner_id") or "")
+    if str(interaction.user.id) != owner_id:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "❌ Apenas quem abriu este ticket pode usar o botão **Notificar equipe**.",
+                ephemeral=True
+            )
+        return
+
+    allowed_ids = [str(r) for r in (ticket_data.get("allowed_role_ids") or []) if str(r).isdigit()]
+    if not allowed_ids:
+        allowed_ids = [str(r) for r in (cfg.get("cargos", {}).get("cargos_permitidos_ids") or []) if str(r).isdigit()]
+
+    if not allowed_ids:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "⚠️ Nenhum cargo de equipe configurado para notificar neste ticket.",
+                ephemeral=True
+            )
+        return
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    thread = interaction.channel
+    if thread is None or getattr(thread, "id", 0) != tid_int:
+        try:
+            thread = await interaction.client.fetch_channel(tid_int)
+        except Exception:
+            thread = interaction.channel
+
+    if thread is None:
+        await interaction.followup.send("❌ Não foi possível acessar este tópico.", ephemeral=True)
+        return
+
+    roles_mention = " ".join(f"<@&{rid}>" for rid in allowed_ids)
+    emoji_announcement = EmojiManager.get("announcement", fallback="📢")
+    emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+    painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
+    accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    notify_msg = f"{emoji_announcement} {interaction.user.mention} notificou a equipe sobre este atendimento: {roles_mention}"
+    allowed_mentions = discord.AllowedMentions(roles=True, users=True)
+    try:
+        if HAS_COMPONENTS_V2:
+            notify_view = discord.ui.LayoutView(timeout=None)
+            notify_view.add_item(
+                discord.ui.Container(discord.ui.TextDisplay(notify_msg), accent_colour=accent_color)
+            )
+            await thread.send(view=notify_view, allowed_mentions=allowed_mentions)
+        else:
+            await thread.send(content=notify_msg, allowed_mentions=allowed_mentions)
+    except Exception as e:
+        logger.warning(f"Erro ao notificar equipe no tópico {tid_int}: {e}")
+        await interaction.followup.send(f"❌ Erro ao notificar a equipe: {e}", ephemeral=True)
+        return
+
+    await interaction.followup.send(
+        f"{emoji_correto} A equipe foi notificada sobre o seu ticket!",
+        ephemeral=True
+    )
+
+
+async def handle_ticket_leave_opener(
+    interaction: discord.Interaction,
+    guild_id: int = 0,
+    thread_id: int = 0,
+) -> None:
+    """Remove o autor do ticket forçadamente do tópico privado (exclusivo para quem abriu)."""
+    if interaction.id in _handled_ticket_action_interactions:
+        return
+    _handled_ticket_action_interactions.append(interaction.id)
+    if len(_handled_ticket_action_interactions) > 200:
+        del _handled_ticket_action_interactions[:100]
+
+    gid_int = guild_id or (interaction.guild_id or 0)
+    gid_str = str(gid_int or "direct")
+    tid_int = thread_id or (interaction.channel_id or 0)
+    tid_str = str(tid_int)
+
+    cfg = CloudStorage.get_guild_config(gid_str)
+    ticket_data = cfg.get("tickets_ativos", {}).get(tid_str)
+    if not isinstance(ticket_data, dict):
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                ephemeral=True
+            )
+        return
+
+    owner_id = str(ticket_data.get("owner_id") or "")
+    if str(interaction.user.id) != owner_id:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "❌ Apenas quem abriu este ticket pode usar o botão **Sair do atendimento**.",
+                ephemeral=True
+            )
+        return
+
+    thread = interaction.channel
+    if thread is None or getattr(thread, "id", 0) != tid_int:
+        try:
+            thread = await interaction.client.fetch_channel(tid_int)
+        except Exception:
+            thread = interaction.channel
+
+    if thread is None or not hasattr(thread, "remove_user"):
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Não foi possível acessar este tópico.", ephemeral=True)
+        return
+
+    emoji_back = EmojiManager.get("back", fallback="🚪")
+    emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+    painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
+    accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            f"{emoji_back} Você saiu do atendimento.",
+            ephemeral=True
+        )
+
+    leave_txt = f"{emoji_member} {interaction.user.mention} saiu do atendimento."
+    try:
+        if HAS_COMPONENTS_V2:
+            leave_view = discord.ui.LayoutView(timeout=None)
+            leave_view.add_item(
+                discord.ui.Container(discord.ui.TextDisplay(leave_txt), accent_colour=accent_color)
+            )
+            await thread.send(view=leave_view)
+        else:
+            await thread.send(content=leave_txt)
+    except Exception:
+        pass
+
+    try:
+        await thread.remove_user(interaction.user)
+        logger.info(f"Autor {interaction.user} saiu do atendimento no tópico {tid_int}")
+    except discord.Forbidden:
+        try:
+            await interaction.followup.send(
+                "❌ Não tenho permissão para remover você deste tópico.",
+                ephemeral=True
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"Erro ao remover usuário {interaction.user} do tópico {tid_int}: {e}")
 
 
 async def handle_ticket_panel_action(
@@ -2711,6 +2938,8 @@ async def handle_ticket_panel_action(
                 )
                 fb_view = discord.ui.View(timeout=None)
                 fb_view.add_item(TicketControlSelect(thread_id=tid_int, guild_id=gid_int))
+                fb_view.add_item(NotificarEquipeButton(thread_id=tid_int, guild_id=gid_int))
+                fb_view.add_item(SairAtendimentoButton(thread_id=tid_int, guild_id=gid_int))
                 await interaction.response.edit_message(
                     embed=discord.Embed(description=fallback_txt, color=accent_color),
                     view=fb_view
@@ -3010,6 +3239,8 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
             )
             fb_view = discord.ui.View(timeout=None)
             fb_view.add_item(TicketControlSelect(thread_id=thread.id, guild_id=gid_int))
+            fb_view.add_item(NotificarEquipeButton(thread_id=thread.id, guild_id=gid_int))
+            fb_view.add_item(SairAtendimentoButton(thread_id=thread.id, guild_id=gid_int))
             panel_msg = await thread.send(
                 embed=discord.Embed(description=fallback_txt, color=accent_color),
                 view=fb_view,
@@ -4198,10 +4429,10 @@ class TicketPanelCog(commands.Cog, name="PainelConfig"):
         data = interaction.data or {}
         custom_id = data.get("custom_id")
         values = data.get("values") or []
-        if not values:
-            return
 
         if custom_id == "select_ticket_abrir_categoria":
+            if not values:
+                return
             await asyncio.sleep(0.05)
             if interaction.response.is_done():
                 return
@@ -4211,12 +4442,32 @@ class TicketPanelCog(commands.Cog, name="PainelConfig"):
                 interaction.guild_id or 0
             )
         elif custom_id == "select_ticket_painel_acoes":
+            if not values:
+                return
             await asyncio.sleep(0.05)
             if interaction.response.is_done():
                 return
             await handle_ticket_panel_action(
                 interaction,
                 str(values[0]),
+                interaction.guild_id or 0,
+                interaction.channel_id or 0,
+            )
+        elif custom_id == "btn_ticket_notificar_equipe":
+            await asyncio.sleep(0.05)
+            if interaction.response.is_done():
+                return
+            await handle_ticket_notify_staff(
+                interaction,
+                interaction.guild_id or 0,
+                interaction.channel_id or 0,
+            )
+        elif custom_id == "btn_ticket_sair_atendimento":
+            await asyncio.sleep(0.05)
+            if interaction.response.is_done():
+                return
+            await handle_ticket_leave_opener(
+                interaction,
                 interaction.guild_id or 0,
                 interaction.channel_id or 0,
             )
