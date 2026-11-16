@@ -86,6 +86,47 @@ CORES_DISPONIVEIS = [
     {"label": "Ciano", "value": "1ABC9C", "hex": "#1ABC9C", "int": 0x1ABC9C, "desc": "Ciano turquesa"}
 ]
 
+DIAS_SEMANA = [
+    {"key": "segunda", "label": "Segunda-feira"},
+    {"key": "terca", "label": "Terça-feira"},
+    {"key": "quarta", "label": "Quarta-feira"},
+    {"key": "quinta", "label": "Quinta-feira"},
+    {"key": "sexta", "label": "Sexta-feira"},
+    {"key": "sabado", "label": "Sábado"},
+    {"key": "domingo", "label": "Domingo"},
+]
+
+
+def _normalize_hhmm(raw: str) -> Optional[str]:
+    """Normaliza entrada de horário para HH:MM (00:00 a 23:59). Retorna None se inválido."""
+    s = (raw or "").strip().lower().replace("h", ":")
+    if ":" not in s:
+        if s.isdigit() and len(s) in (1, 2):
+            s = f"{s}:00"
+        elif s.isdigit() and len(s) == 4:
+            s = f"{s[:2]}:{s[2:]}"
+        else:
+            return None
+    parts = s.split(":")
+    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        return None
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return f"{hour:02d}:{minute:02d}"
+    return None
+
+
+def _get_dias_horario(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Retorna o dicionário normalizado dos 7 dias da semana na config da guilda."""
+    ha = cfg.setdefault("horario_atendimento", {})
+    dias = ha.setdefault("dias", {})
+    for d in DIAS_SEMANA:
+        k = d["key"]
+        if k not in dias or not isinstance(dias[k], dict):
+            dias[k] = {"ativo": False, "inicio": None, "fim": None}
+    return dias
+
 def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
     """Converte tag de emoji em discord.PartialEmoji ou string Unicode de forma segura."""
     raw = EmojiManager.get(emoji_key, fallback=default_unicode)
@@ -175,15 +216,29 @@ def format_settings_panel_text() -> str:
     return "\n".join(lines)
 
 
-def format_business_hours_panel_text() -> str:
-    """Retorna o texto do painel de horário de atendimento."""
+def format_business_hours_panel_text(guild_id: str) -> str:
+    """Retorna o texto do painel de horário de atendimento com o status de cada dia da semana."""
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_online = EmojiManager.get("online", fallback="🟢")
+    emoji_off = EmojiManager.get("off", fallback="⚪")
+
+    cfg = CloudStorage.get_guild_config(guild_id)
+    dias = _get_dias_horario(cfg)
 
     lines = [
         f"## {emoji_bot} Horário de atendimento\n",
-        f"> {emoji_info} Configure o horário em que os membros podem abrir tickets para serem atendidos."
+        f"> {emoji_info} Configure o horário em que os membros podem abrir tickets para serem atendidos.\n"
     ]
+
+    for d in DIAS_SEMANA:
+        info = dias.get(d["key"], {})
+        ativo = bool(info.get("ativo")) and bool(info.get("inicio")) and bool(info.get("fim"))
+        if ativo:
+            lines.append(f"> {emoji_online} **{d['label']}:** `{info['inicio']}` às `{info['fim']}`")
+        else:
+            lines.append(f"> {emoji_off} **{d['label']}:** Não configurado")
+
     return "\n".join(lines)
 
 
@@ -705,6 +760,126 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
             await interaction.response.send_message(f"Ocorreu um erro ao salvar categoria: {error}", ephemeral=True)
 
 
+class HorarioDiaModal(discord.ui.Modal, title="Horário de atendimento"):
+    """Modal com 2 abas (Label Type 18) para definir horário de começo e término de um dia."""
+    def __init__(
+        self,
+        guild_id: int,
+        user_id: int,
+        dia_key: str,
+        dia_label: str,
+        inicio_atual: Optional[str] = None,
+        fim_atual: Optional[str] = None
+    ):
+        super().__init__(title=f"Horário - {dia_label}"[:45])
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.dia_key = dia_key
+        self.dia_label = dia_label
+        self.inicio_atual = inicio_atual
+        self.fim_atual = fim_atual
+
+    def to_components(self) -> List[Dict[str, Any]]:
+        comp_inicio: Dict[str, Any] = {
+            "type": 4,
+            "custom_id": "horario_inicio",
+            "style": 1,
+            "placeholder": "Ex: 08:00",
+            "min_length": 0,
+            "max_length": 5,
+            "required": False
+        }
+        if self.inicio_atual:
+            comp_inicio["value"] = str(self.inicio_atual)[:5]
+
+        comp_fim: Dict[str, Any] = {
+            "type": 4,
+            "custom_id": "horario_fim",
+            "style": 1,
+            "placeholder": "Ex: 18:00",
+            "min_length": 0,
+            "max_length": 5,
+            "required": False
+        }
+        if self.fim_atual:
+            comp_fim["value"] = str(self.fim_atual)[:5]
+
+        return [
+            {
+                "type": 18,
+                "label": "Horário de começo dos atendimentos",
+                "description": "Formato HH:MM (ex: 08:00). Deixe vazio para desativar o dia.",
+                "component": comp_inicio
+            },
+            {
+                "type": 18,
+                "label": "Horário de término dos atendimentos",
+                "description": "Formato HH:MM (ex: 18:00). Deixe vazio para desativar o dia.",
+                "component": comp_fim
+            }
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "custom_id": self.custom_id,
+            "components": self.to_components()
+        }
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw_inicio = ""
+        raw_fim = ""
+
+        for wrapper in interaction.data.get("components", []):
+            if wrapper.get("type") == 18 and isinstance(wrapper.get("component"), dict):
+                inner_list = [wrapper["component"]]
+            elif wrapper.get("type") == 1 and isinstance(wrapper.get("components"), list):
+                inner_list = wrapper["components"]
+            else:
+                inner_list = [wrapper]
+
+            for comp in inner_list:
+                cid = comp.get("custom_id")
+                if cid == "horario_inicio":
+                    raw_inicio = (comp.get("value") or "").strip()
+                elif cid == "horario_fim":
+                    raw_fim = (comp.get("value") or "").strip()
+
+        gid_str = str(self.guild_id or interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        dias = _get_dias_horario(cfg)
+
+        if not raw_inicio and not raw_fim:
+            dias[self.dia_key] = {"ativo": False, "inicio": None, "fim": None}
+            logger.info(f"Horário de {self.dia_label} desativado por {interaction.user} na guilda {gid_str}")
+        else:
+            inicio_fmt = _normalize_hhmm(raw_inicio)
+            fim_fmt = _normalize_hhmm(raw_fim)
+            if not inicio_fmt or not fim_fmt:
+                await interaction.response.send_message(
+                    "Formato de horário inválido. Use o padrão `HH:MM` (ex: `08:00` e `18:00`) ou deixe ambos vazios para desativar.",
+                    ephemeral=True
+                )
+                return
+            dias[self.dia_key] = {"ativo": True, "inicio": inicio_fmt, "fim": fim_fmt}
+            logger.info(f"Horário de {self.dia_label} definido para {inicio_fmt}-{fim_fmt} por {interaction.user} na guilda {gid_str}")
+
+        cfg["horario_atendimento"]["ativo"] = any(bool(v.get("ativo")) for v in dias.values())
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+        await render_business_hours_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de horário de atendimento: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar horário: {error}", ephemeral=True)
+
+
 # =====================================================================
 # BOTÕES DO PAINEL DE APARÊNCIA (SUBCLASSES COM CALLBACK PRÓPRIO)
 # =====================================================================
@@ -1157,6 +1332,67 @@ class EditarCategoriaSelect(discord.ui.Select):
                 )
 
 
+class HorarioDiaSelect(discord.ui.Select):
+    """Select Menu contendo todos os 7 dias da semana para configurar horário de atendimento."""
+    def __init__(self, guild_id: int, user_id: int, cfg: Dict[str, Any]):
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        dias = _get_dias_horario(cfg)
+        emoji_online = resolve_partial_emoji("online", "🟢")
+        emoji_off = resolve_partial_emoji("off", "⚪")
+
+        options = []
+        for d in DIAS_SEMANA:
+            info = dias.get(d["key"], {})
+            ativo = bool(info.get("ativo")) and bool(info.get("inicio")) and bool(info.get("fim"))
+            if ativo:
+                desc = f"{info['inicio']} às {info['fim']}"
+                opt_emoji = emoji_online
+            else:
+                desc = "Não configurado"
+                opt_emoji = emoji_off
+
+            options.append(
+                discord.SelectOption(
+                    label=d["label"],
+                    value=d["key"],
+                    description=desc,
+                    emoji=opt_emoji
+                )
+            )
+
+        super().__init__(
+            placeholder="Selecione um dia da semana...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="select_horario_dia"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        dia_key = self.values[0]
+        dia_info = next((d for d in DIAS_SEMANA if d["key"] == dia_key), None)
+        dia_label = dia_info["label"] if dia_info else dia_key
+
+        gid = str(self.guild_id or interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid)
+        dias = _get_dias_horario(cfg)
+        atual = dias.get(dia_key, {})
+
+        logger.info(f"Dia '{dia_label}' selecionado para edição de horário por {interaction.user}")
+        await interaction.response.send_modal(
+            HorarioDiaModal(
+                self.guild_id or (interaction.guild_id or 0),
+                self.user_id or interaction.user.id,
+                dia_key=dia_key,
+                dia_label=dia_label,
+                inicio_atual=atual.get("inicio"),
+                fim_atual=atual.get("fim")
+            )
+        )
+
+
 class VoltarParaCategoriasButton(discord.ui.Button):
     """Botão Voltar dos subpainéis de categoria: sempre azul na última linha separada."""
     def __init__(self, guild_id: int, user_id: int, custom_id: str = "btn_remover_categoria_voltar"):
@@ -1416,10 +1652,13 @@ def build_v2_business_hours_layout(guild_id: int, user_id: int):
         gid_str = str(guild_id or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
         cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-        text = format_business_hours_panel_text()
+        text = format_business_hours_panel_text(gid_str)
 
         layout_view = discord.ui.LayoutView(timeout=None)
 
+        row_select = discord.ui.ActionRow(
+            HorarioDiaSelect(guild_id, user_id, cfg)
+        )
         row_voltar = discord.ui.ActionRow(
             VoltarParaSistemaButton(guild_id, user_id, custom_id="btn_horario_voltar")
         )
@@ -1431,6 +1670,7 @@ def build_v2_business_hours_layout(guild_id: int, user_id: int):
         container = discord.ui.Container(
             discord.ui.TextDisplay(text),
             separator,
+            row_select,
             row_voltar,
             accent_colour=cor_embed
         )
@@ -1735,9 +1975,10 @@ async def render_business_hours_panel(interaction: discord.Interaction, guild_id
     gid_str = str(guild_id or "direct")
     cfg = CloudStorage.get_guild_config(gid_str)
     cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-    text = format_business_hours_panel_text()
+    text = format_business_hours_panel_text(gid_str)
     embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
+    view.add_item(HorarioDiaSelect(guild_id, user_id, cfg))
     view.add_item(VoltarParaSistemaButton(guild_id, user_id, custom_id="btn_horario_voltar"))
 
     if is_edit:

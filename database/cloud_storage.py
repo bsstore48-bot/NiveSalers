@@ -91,7 +91,16 @@ class CloudStorage:
             "horario_atendimento": {
                 "ativo": False,
                 "inicio": "08:00",
-                "fim": "18:00"
+                "fim": "18:00",
+                "dias": {
+                    "segunda": {"ativo": False, "inicio": None, "fim": None},
+                    "terca": {"ativo": False, "inicio": None, "fim": None},
+                    "quarta": {"ativo": False, "inicio": None, "fim": None},
+                    "quinta": {"ativo": False, "inicio": None, "fim": None},
+                    "sexta": {"ativo": False, "inicio": None, "fim": None},
+                    "sabado": {"ativo": False, "inicio": None, "fim": None},
+                    "domingo": {"ativo": False, "inicio": None, "fim": None}
+                }
             }
         }
 
