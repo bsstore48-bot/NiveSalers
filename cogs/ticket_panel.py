@@ -4,6 +4,7 @@ utilizando Discord Components v2 (LayoutView, Container, ActionRow) e
 modais com suporte nativo a componentes de upload de arquivo.
 """
 
+import asyncio
 import logging
 import uuid
 from typing import Dict, Any, List, Optional
@@ -168,16 +169,45 @@ def format_main_panel_text() -> str:
     ]
     return "\n".join(lines)
 
+def _get_configured_appearance(painel_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Retorna apenas os campos de aparência realmente configurados pelo usuário."""
+    raw_titulo = (painel_cfg.get("titulo") or "").strip()
+    titulo_cfg = bool(painel_cfg.get("titulo_configurado"))
+    titulo = raw_titulo if raw_titulo and (titulo_cfg or raw_titulo != "Painel de Atendimento") else None
+
+    raw_desc = (painel_cfg.get("descricao") or "").strip()
+    desc_cfg = bool(painel_cfg.get("descricao_configurada"))
+    descricao = raw_desc if raw_desc and (desc_cfg or raw_desc != "Abra um ticket para falar com a nossa equipe.") else None
+
+    banner_url = (painel_cfg.get("banner_url") or "").strip() or None
+    thumbnail_url = (painel_cfg.get("thumbnail_url") or "").strip() or None
+
+    cor_hex = (painel_cfg.get("cor_hex") or "").strip() or None
+    cor_val = painel_cfg.get("cor")
+    cor_cfg = bool(painel_cfg.get("cor_configurada")) or bool(cor_hex) or (cor_val is not None and cor_val != config.EMBED_COLOR_DEFAULT)
+    cor = cor_val if cor_cfg and cor_val is not None else None
+
+    return {
+        "titulo": titulo,
+        "descricao": descricao,
+        "banner_url": banner_url,
+        "thumbnail_url": thumbnail_url,
+        "cor": cor,
+        "cor_hex": cor_hex,
+    }
+
+
 def format_appearance_panel_text(guild_id: str) -> str:
     """Retorna o texto formatado do painel de aparência com os valores dinâmicos do servidor."""
     cfg = CloudStorage.get_guild_config(guild_id)
     painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
 
-    titulo = painel_cfg.get("titulo") or "Não definido"
-    descricao = painel_cfg.get("descricao") or "Não definido"
-    banner = painel_cfg.get("banner_url") or "Não definido"
-    thumbnail = painel_cfg.get("thumbnail_url") or "Não definido"
-    cor = painel_cfg.get("cor_hex") or "#FFFFFF"
+    titulo = app["titulo"] or "Não definido"
+    descricao = app["descricao"] or "Não definido"
+    banner = app["banner_url"] or "Não definido"
+    thumbnail = app["thumbnail_url"] or "Não definido"
+    cor = app["cor_hex"] or (f"#{app['cor']:06X}" if app["cor"] is not None else "Não definido")
 
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
@@ -314,7 +344,7 @@ class TituloModal(discord.ui.Modal, title="Configurar Título"):
         self.user_id = user_id
 
         cfg = CloudStorage.get_guild_config(str(guild_id))
-        valor_atual = cfg.get("painel", {}).get("titulo") or ""
+        valor_atual = _get_configured_appearance(cfg.get("painel", {})).get("titulo") or ""
 
         self.titulo_input = discord.ui.TextInput(
             label="Título do painel",
@@ -332,7 +362,9 @@ class TituloModal(discord.ui.Modal, title="Configurar Título"):
         gid_str = str(gid_int or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
         cfg["painel"]["titulo"] = novo_titulo
+        cfg["painel"]["titulo_configurado"] = True
         await CloudStorage.save_guild_config(gid_str, cfg)
+        _schedule_panel_refresh(interaction.client, gid_int, interaction.guild)
 
         logger.info(f"Título atualizado por {interaction.user} no servidor {gid_str}: '{novo_titulo}'")
         await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
@@ -351,7 +383,7 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
         self.user_id = user_id
 
         cfg = CloudStorage.get_guild_config(str(guild_id))
-        valor_atual = cfg.get("painel", {}).get("descricao") or ""
+        valor_atual = _get_configured_appearance(cfg.get("painel", {})).get("descricao") or ""
 
         self.descricao_input = discord.ui.TextInput(
             label="Descrição do painel",
@@ -370,7 +402,9 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
         gid_str = str(gid_int or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
         cfg["painel"]["descricao"] = nova_descricao
+        cfg["painel"]["descricao_configurada"] = True
         await CloudStorage.save_guild_config(gid_str, cfg)
+        _schedule_panel_refresh(interaction.client, gid_int, interaction.guild)
 
         logger.info(f"Descrição atualizada por {interaction.user} no servidor {gid_str}")
         await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
@@ -456,6 +490,7 @@ class BannerModal(discord.ui.Modal, title="Configurar Banner"):
             cfg = CloudStorage.get_guild_config(gid_str)
             cfg["painel"]["banner_url"] = novo_banner
             await CloudStorage.save_guild_config(gid_str, cfg)
+            _schedule_panel_refresh(interaction.client, gid_int, interaction.guild)
             logger.info(f"Banner atualizado via componente de upload por {interaction.user}: {novo_banner}")
 
         await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
@@ -541,6 +576,7 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
             cfg = CloudStorage.get_guild_config(gid_str)
             cfg["painel"]["thumbnail_url"] = nova_thumb
             await CloudStorage.save_guild_config(gid_str, cfg)
+            _schedule_panel_refresh(interaction.client, gid_int, interaction.guild)
             logger.info(f"Thumbnail atualizada via componente de upload por {interaction.user}: {nova_thumb}")
 
         await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
@@ -760,6 +796,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
             logger.info(f"Nova categoria '{nome}' criada por {interaction.user} na guilda {gid_str}")
 
         await CloudStorage.save_guild_config(gid_str, cfg)
+        _schedule_panel_refresh(interaction.client, self.guild_id or (interaction.guild_id or 0), interaction.guild)
         await render_categories_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
@@ -1172,7 +1209,9 @@ class CorEmbedSelect(discord.ui.Select):
             cfg = CloudStorage.get_guild_config(gid)
             cfg["painel"]["cor_hex"] = cor_selecionada["hex"]
             cfg["painel"]["cor"] = cor_selecionada["int"]
+            cfg["painel"]["cor_configurada"] = True
             await CloudStorage.save_guild_config(gid, cfg)
+            _schedule_panel_refresh(interaction.client, self.guild_id or (interaction.guild_id or 0), interaction.guild)
             logger.info(f"Cor da embed alterada por {interaction.user} para {cor_selecionada['hex']}")
 
             await render_cor_panel(interaction, self.guild_id, self.user_id, is_edit=True)
@@ -1248,6 +1287,7 @@ class RemoverCategoriaSelect(discord.ui.Select):
 
         cfg["categorias_ticket"] = novas_categorias
         await CloudStorage.save_guild_config(gid, cfg)
+        _schedule_panel_refresh(interaction.client, self.guild_id or (interaction.guild_id or 0), interaction.guild)
         logger.info(f"Categoria '{removida_nome}' removida por {interaction.user} na guilda {gid}")
 
         await render_categories_panel(
@@ -2139,7 +2179,435 @@ async def render_edit_category_panel(interaction: discord.Interaction, guild_id:
 
 
 # =====================================================================
-# COMANDO SLASH /configurar painel (SEM PARÂMETRO)
+# PAINEL PÚBLICO DE TICKETS (/set painel)
+# =====================================================================
+
+_handled_public_interactions: List[int] = []
+
+
+async def handle_public_category_selection(interaction: discord.Interaction, selected_id: str, guild_id: int = 0) -> None:
+    """Processa a seleção de categoria no painel público de tickets (funciona também após reinício)."""
+    if interaction.id in _handled_public_interactions:
+        return
+    _handled_public_interactions.append(interaction.id)
+    if len(_handled_public_interactions) > 200:
+        del _handled_public_interactions[:100]
+
+    gid_str = str(guild_id or interaction.guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    categorias = cfg.get("categorias_ticket", [])
+
+    categoria_alvo = None
+    for idx, cat in enumerate(categorias):
+        cat_val = str(cat.get("id") or f"idx_{idx}")
+        if cat_val == str(selected_id):
+            categoria_alvo = cat
+            break
+
+    if categoria_alvo is None:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Esta categoria não está mais disponível no painel.",
+                ephemeral=True
+            )
+        return
+
+    cat_nome = categoria_alvo.get("nome") or "Atendimento"
+    logger.info(f"Categoria pública '{cat_nome}' selecionada por {interaction.user} na guilda {gid_str}")
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            f"Categoria **{cat_nome}** selecionada.",
+            ephemeral=True
+        )
+
+
+class PublicTicketCategorySelect(discord.ui.Select):
+    """Select Menu público exibido no painel de tickets contendo apenas as categorias configuradas."""
+    def __init__(self, guild_id: int, categorias: List[Dict[str, Any]], guild=None):
+        self.guild_id = guild_id
+        options = []
+        for idx, cat in enumerate(categorias[:25]):
+            nome = (cat.get("nome") or f"Categoria {idx + 1}").strip()[:100]
+            desc_raw = (cat.get("descricao") or "").strip()
+            desc = desc_raw[:100] if desc_raw else None
+            val = str(cat.get("id") or f"idx_{idx}")[:100]
+            raw_emoji = (cat.get("emoji") or "").strip()
+            opt_emoji = resolve_category_emoji(raw_emoji, "folder", "📁", guild=guild) if raw_emoji else None
+            options.append(
+                discord.SelectOption(
+                    label=nome,
+                    value=val,
+                    description=desc,
+                    emoji=opt_emoji
+                )
+            )
+
+        super().__init__(
+            placeholder="Selecione uma categoria...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="select_ticket_abrir_categoria"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await handle_public_category_selection(
+            interaction,
+            self.values[0],
+            self.guild_id or (interaction.guild_id or 0)
+        )
+
+
+def build_v2_public_ticket_layout(guild_id: int, guild=None):
+    """
+    Constrói o painel público de tickets em Componentes V2 contendo EXCLUSIVAMENTE
+    o que foi configurado na Aparência (/configurar painel) e o Select Menu de categorias.
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        painel_cfg = cfg.get("painel", {})
+        app = _get_configured_appearance(painel_cfg)
+        categorias = cfg.get("categorias_ticket", [])
+        if not categorias:
+            return None
+
+        container_items: List[Any] = []
+        text_parts: List[str] = []
+        if app["titulo"]:
+            text_parts.append(f"## {app['titulo']}")
+        if app["descricao"]:
+            text_parts.append(app["descricao"])
+
+        has_section = hasattr(discord.ui, "Section") and hasattr(discord.ui, "Thumbnail")
+        has_gallery = hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem")
+
+        if text_parts:
+            text_display = discord.ui.TextDisplay("\n\n".join(text_parts))
+            if app["thumbnail_url"] and has_section:
+                container_items.append(
+                    discord.ui.Section(
+                        text_display,
+                        accessory=discord.ui.Thumbnail(media=app["thumbnail_url"])
+                    )
+                )
+            else:
+                container_items.append(text_display)
+        elif app["thumbnail_url"] and has_gallery:
+            container_items.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(media=app["thumbnail_url"]))
+            )
+
+        if app["banner_url"] and has_gallery:
+            container_items.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(media=app["banner_url"]))
+            )
+
+        if container_items:
+            separator_spacing = getattr(discord, "SeparatorSpacing", None)
+            spacing_arg = separator_spacing.small if separator_spacing else None
+            separator = (
+                discord.ui.Separator(visible=True)
+                if spacing_arg is None
+                else discord.ui.Separator(visible=True, spacing=spacing_arg)
+            )
+            container_items.append(separator)
+
+        container_items.append(
+            discord.ui.ActionRow(PublicTicketCategorySelect(guild_id, categorias, guild=guild))
+        )
+
+        container_kwargs: Dict[str, Any] = {}
+        if app["cor"] is not None:
+            container_kwargs["accent_colour"] = app["cor"]
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(*container_items, **container_kwargs)
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 do painel público: {e}")
+        return None
+
+
+def build_fallback_public_ticket_payload(guild_id: int, guild=None) -> Dict[str, Any]:
+    """Fallback em Embed padrão usando estritamente o que foi configurado na Aparência."""
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
+    categorias = cfg.get("categorias_ticket", [])
+
+    view = discord.ui.View(timeout=None)
+    if categorias:
+        view.add_item(PublicTicketCategorySelect(guild_id, categorias, guild=guild))
+
+    has_embed_content = any([app["titulo"], app["descricao"], app["banner_url"], app["thumbnail_url"]])
+    if has_embed_content:
+        embed_kwargs: Dict[str, Any] = {}
+        if app["titulo"]:
+            embed_kwargs["title"] = app["titulo"]
+        if app["descricao"]:
+            embed_kwargs["description"] = app["descricao"]
+        if app["cor"] is not None:
+            embed_kwargs["color"] = app["cor"]
+        embed = discord.Embed(**embed_kwargs)
+        if app["banner_url"]:
+            embed.set_image(url=app["banner_url"])
+        if app["thumbnail_url"]:
+            embed.set_thumbnail(url=app["thumbnail_url"])
+        return {"embed": embed, "view": view}
+
+    return {"view": view}
+
+
+async def refresh_sent_ticket_panels(bot: discord.Client, guild_id: int, guild=None) -> None:
+    """Atualiza automaticamente painéis públicos já enviados quando aparência ou categorias mudam."""
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    painel_cfg = cfg.get("painel", {})
+    if not painel_cfg.get("atualizacao_automatica", True):
+        return
+    enviados = painel_cfg.get("paineis_enviados") or []
+    if not enviados or not cfg.get("categorias_ticket"):
+        return
+
+    v2_view = build_v2_public_ticket_layout(guild_id, guild=guild)
+    fallback_payload = None if v2_view is not None else build_fallback_public_ticket_payload(guild_id, guild=guild)
+
+    valid_entries = []
+    changed = False
+    for entry in enviados:
+        ch_id = entry.get("channel_id")
+        msg_id = entry.get("message_id")
+        if not ch_id or not msg_id:
+            continue
+        try:
+            channel = (guild.get_channel(int(ch_id)) if guild else None) or bot.get_channel(int(ch_id)) or await bot.fetch_channel(int(ch_id))
+            msg = await channel.fetch_message(int(msg_id))
+            if v2_view is not None:
+                await msg.edit(view=v2_view, embed=None, content=None)
+            elif fallback_payload is not None:
+                await msg.edit(**fallback_payload, content=None)
+            valid_entries.append(entry)
+        except discord.NotFound:
+            changed = True
+        except Exception as e:
+            logger.warning(f"Não foi possível atualizar painel enviado ({ch_id}/{msg_id}): {e}")
+            valid_entries.append(entry)
+
+    if changed:
+        painel_cfg["paineis_enviados"] = valid_entries
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+
+def _schedule_panel_refresh(bot: discord.Client, guild_id: int, guild=None) -> None:
+    try:
+        asyncio.create_task(refresh_sent_ticket_panels(bot, guild_id, guild=guild))
+    except Exception:
+        pass
+
+
+def format_set_painel_text(status_msg: Optional[str] = None) -> str:
+    """Texto do painel do comando /set painel."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    lines = [
+        f"## {emoji_bot} Enviar painel de tickets\n",
+        f"> {emoji_info} Selecione abaixo o canal onde deseja enviar o painel de tickets."
+    ]
+    if status_msg:
+        lines.append(f"\n{status_msg}")
+    return "\n".join(lines)
+
+
+class SetPainelChannelSelect(discord.ui.ChannelSelect):
+    """Select Menu de canais para escolher onde enviar o painel público de tickets."""
+    def __init__(self, guild_id: int, user_id: int):
+        self.guild_id = guild_id
+        self.user_id = user_id
+        super().__init__(
+            placeholder="Selecione o canal para enviar o painel...",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            min_values=1,
+            max_values=1,
+            custom_id="select_set_painel_canal"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        categorias = cfg.get("categorias_ticket", [])
+
+        if not categorias:
+            await render_set_painel(
+                interaction,
+                gid_int,
+                self.user_id or interaction.user.id,
+                is_edit=True,
+                status_msg="⚠️ Nenhuma categoria foi configurada ainda. Crie pelo menos uma categoria em `/configurar painel` → **Configurações do sistema** → **Categorias**."
+            )
+            return
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        selected_ch = self.values[0]
+        channel_id = int(getattr(selected_ch, "id", selected_ch))
+        target_channel = (
+            (interaction.guild.get_channel(channel_id) if interaction.guild else None)
+            or interaction.client.get_channel(channel_id)
+        )
+        if target_channel is None:
+            try:
+                target_channel = await interaction.client.fetch_channel(channel_id)
+            except Exception as e:
+                await render_set_painel(
+                    interaction,
+                    gid_int,
+                    self.user_id or interaction.user.id,
+                    is_edit=True,
+                    status_msg=f"❌ Não foi possível acessar o canal selecionado: {e}"
+                )
+                return
+
+        await _ensure_guild_category_emojis(interaction, gid_int)
+
+        sent_msg = None
+        v2_view = build_v2_public_ticket_layout(gid_int, guild=interaction.guild)
+        if v2_view is not None:
+            try:
+                sent_msg = await target_channel.send(view=v2_view)
+            except discord.Forbidden:
+                await render_set_painel(
+                    interaction,
+                    gid_int,
+                    self.user_id or interaction.user.id,
+                    is_edit=True,
+                    status_msg=f"❌ Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Aviso ao enviar painel público V2 em {target_channel.id}: {e}. Tentando fallback.")
+
+        if sent_msg is None:
+            fallback_payload = build_fallback_public_ticket_payload(gid_int, guild=interaction.guild)
+            try:
+                sent_msg = await target_channel.send(**fallback_payload)
+            except discord.Forbidden:
+                await render_set_painel(
+                    interaction,
+                    gid_int,
+                    self.user_id or interaction.user.id,
+                    is_edit=True,
+                    status_msg=f"❌ Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
+                )
+                return
+            except Exception as e:
+                await render_set_painel(
+                    interaction,
+                    gid_int,
+                    self.user_id or interaction.user.id,
+                    is_edit=True,
+                    status_msg=f"❌ Erro ao enviar o painel no canal {target_channel.mention}: {e}"
+                )
+                return
+
+        enviados = cfg.setdefault("painel", {}).setdefault("paineis_enviados", [])
+        enviados.append({"channel_id": str(target_channel.id), "message_id": str(sent_msg.id)})
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+        emoji_on = EmojiManager.get("on", fallback="<:on:1561908741073281054>")
+        logger.info(f"Painel público de tickets enviado em #{target_channel} ({target_channel.id}) por {interaction.user} na guilda {gid_str}")
+        await render_set_painel(
+            interaction,
+            gid_int,
+            self.user_id or interaction.user.id,
+            is_edit=True,
+            status_msg=f"{emoji_on} Painel de tickets enviado com sucesso em {target_channel.mention}!"
+        )
+
+
+def build_v2_set_painel_layout(guild_id: int, user_id: int, status_msg: Optional[str] = None):
+    """Constrói o painel V2 do comando /set painel com Select Menu de canal."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        app = _get_configured_appearance(cfg.get("painel", {}))
+        cor_embed = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+        text = format_set_painel_text(status_msg=status_msg)
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
+        row_select = discord.ui.ActionRow(SetPainelChannelSelect(guild_id, user_id))
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            row_select,
+            accent_colour=cor_embed
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de /set painel: {e}")
+        return None
+
+
+async def render_set_painel(
+    interaction: discord.Interaction,
+    guild_id: int,
+    user_id: int,
+    is_edit: bool = False,
+    status_msg: Optional[str] = None
+):
+    """Renderiza o painel efêmero de seleção de canal do comando /set painel."""
+    v2_view = build_v2_set_painel_layout(guild_id, user_id, status_msg=status_msg)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
+            else:
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de /set painel: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    app = _get_configured_appearance(cfg.get("painel", {}))
+    cor_embed = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    embed = discord.Embed(description=format_set_painel_text(status_msg=status_msg), color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    view.add_item(SetPainelChannelSelect(guild_id, user_id))
+
+    if is_edit:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+# =====================================================================
+# COMANDOS SLASH /configurar painel E /set painel
 # =====================================================================
 
 class ConfigurarGroup(app_commands.Group):
@@ -2160,14 +2628,54 @@ class ConfigurarGroup(app_commands.Group):
         await render_main_panel(interaction, guild_id, user_id, is_edit=False)
 
 
+class SetGroup(app_commands.Group):
+    """Grupo de comandos /set"""
+    def __init__(self):
+        super().__init__(name="set", description="Define e envia painéis do sistema de atendimento NiveSalers")
+
+    @app_commands.command(
+        name="painel",
+        description="Escolhe o canal e envia o painel público de tickets configurado."
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def painel(self, interaction: discord.Interaction):
+        """Abre o painel com Select Menu para escolher o canal de envio do painel de tickets."""
+        guild_id = interaction.guild_id or 0
+        user_id = interaction.user.id
+        logger.info(f"Comando /set painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
+        await render_set_painel(interaction, guild_id, user_id, is_edit=False)
+
+
 class TicketPanelCog(commands.Cog, name="PainelConfig"):
     """Cog responsável pelos comandos e interações do painel de configuração."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.configurar_group = ConfigurarGroup()
+        self.set_group = SetGroup()
         self.bot.tree.add_command(self.configurar_group)
+        self.bot.tree.add_command(self.set_group)
         logger.info("TicketPanelCog carregado com sucesso")
+
+    @commands.Cog.listener("on_interaction")
+    async def on_public_ticket_interaction(self, interaction: discord.Interaction):
+        """Mantém o Select Menu do painel público de tickets funcional mesmo após reinícios do bot."""
+        if interaction.type != discord.InteractionType.component:
+            return
+        data = interaction.data or {}
+        if data.get("custom_id") != "select_ticket_abrir_categoria":
+            return
+        values = data.get("values") or []
+        if not values:
+            return
+        await asyncio.sleep(0.05)
+        if interaction.response.is_done():
+            return
+        await handle_public_category_selection(
+            interaction,
+            str(values[0]),
+            interaction.guild_id or 0
+        )
 
 
 async def setup(bot: commands.Bot):

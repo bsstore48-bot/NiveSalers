@@ -97,10 +97,15 @@ class CloudStorage:
         return {
             "guild_id": str(guild_id),
             "painel": {
-                "titulo": "Painel de Atendimento",
-                "descricao": "Abra um ticket para falar com a nossa equipe.",
-                "cor": config.EMBED_COLOR_DEFAULT,
+                "titulo": None,
+                "descricao": None,
+                "cor": None,
+                "cor_hex": None,
                 "banner_url": None,
+                "thumbnail_url": None,
+                "titulo_configurado": False,
+                "descricao_configurada": False,
+                "cor_configurada": False,
                 "canal_id": None,
                 "categoria_id": None,
                 "cargo_suporte_id": None,
