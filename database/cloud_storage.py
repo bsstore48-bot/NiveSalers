@@ -116,6 +116,9 @@ class CloudStorage:
             "categorias_ticket": [],
             "logs": {
                 "canal_logs_id": None,
+                "canal_abertos_id": None,
+                "canal_fechados_id": None,
+                "canal_assumidos_id": None,
                 "transcripts_ativo": True
             },
             "horario_atendimento": {

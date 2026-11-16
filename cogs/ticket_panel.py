@@ -2674,8 +2674,130 @@ def format_configuracoes_panel_text() -> str:
     )
 
 
+def format_canais_config_panel_text(guild_id: str) -> str:
+    """Retorna o texto do painel de configuração de canais (/configurações -> Canais)."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_double_speech = EmojiManager.get("double_speech", fallback="<:double_speech:1561906215834091660>")
+
+    cfg = CloudStorage.get_guild_config(guild_id)
+    logs_cfg = cfg.get("logs", {})
+
+    def _fmt_ch(ch_id: Optional[str]) -> str:
+        return f"<#{ch_id}>" if ch_id else "Não definido"
+
+    abertos = _fmt_ch(logs_cfg.get("canal_abertos_id"))
+    fechados = _fmt_ch(logs_cfg.get("canal_fechados_id"))
+    assumidos = _fmt_ch(logs_cfg.get("canal_assumidos_id"))
+
+    return (
+        f"## {emoji_bot} Canais\n\n"
+        f"> {emoji_info} Configure os seguintes canais para conseguir monitorar tudo que acontece no atendimento do seu servidor.\n"
+        f"> \n"
+        f"> {emoji_double_speech} Canal Logs de tickets abertos: {abertos}\n"
+        f"> {emoji_double_speech} Canal Logs de tickets fechados: {fechados}\n"
+        f"> {emoji_double_speech} Canal Logs de tickets assumidos: {assumidos}"
+    )
+
+
+class LogsCanalSelect(discord.ui.ChannelSelect):
+    """Channel Select Menu reutilizável para configurar um canal de log de tickets."""
+    def __init__(
+        self,
+        guild_id: int,
+        user_id: int,
+        log_key: str,
+        placeholder: str,
+        custom_id: str,
+        current_channel_id: Optional[str] = None,
+    ):
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.log_key = log_key
+
+        default_values = []
+        if current_channel_id:
+            try:
+                default_val_cls = getattr(discord, "SelectDefaultValue", None)
+                default_type_enum = getattr(discord, "SelectDefaultValueType", None)
+                if default_val_cls and default_type_enum:
+                    default_values = [
+                        default_val_cls(id=int(current_channel_id), type=default_type_enum.channel)
+                    ]
+                else:
+                    default_values = [discord.Object(id=int(current_channel_id))]
+            except Exception:
+                default_values = []
+
+        select_kwargs: Dict[str, Any] = {
+            "placeholder": placeholder,
+            "channel_types": [discord.ChannelType.text, discord.ChannelType.news],
+            "min_values": 0,
+            "max_values": 1,
+            "custom_id": custom_id,
+        }
+        if default_values:
+            select_kwargs["default_values"] = default_values
+
+        try:
+            super().__init__(**select_kwargs)
+        except TypeError:
+            select_kwargs.pop("default_values", None)
+            super().__init__(**select_kwargs)
+
+    async def callback(self, interaction: discord.Interaction):
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        logs_cfg = cfg.setdefault("logs", {})
+
+        if self.values:
+            selected_ch = self.values[0]
+            channel_id = str(getattr(selected_ch, "id", selected_ch))
+            logs_cfg[self.log_key] = channel_id
+            logger.info(
+                f"Canal de log '{self.log_key}' definido para {channel_id} por {interaction.user} na guilda {gid_str}"
+            )
+        else:
+            logs_cfg[self.log_key] = None
+            logger.info(
+                f"Canal de log '{self.log_key}' removido por {interaction.user} na guilda {gid_str}"
+            )
+
+        await CloudStorage.save_guild_config(gid_str, cfg)
+        await render_canais_config_panel(
+            interaction,
+            gid_int,
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+class VoltarParaConfiguracoesButton(discord.ui.Button):
+    """Botão Voltar do painel de Canais para o painel /configurações."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Voltar",
+            emoji=resolve_partial_emoji("back", "⬅️"),
+            style=discord.ButtonStyle.primary,
+            custom_id="btn_canais_voltar",
+            row=3
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Voltar clicado por {interaction.user} no painel de Canais")
+        await render_configuracoes_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
 class CanaisConfigButton(discord.ui.Button):
-    """Botão Canais do painel /configurações (ainda sem ação)."""
+    """Botão Canais do painel /configurações."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Canais",
@@ -2688,8 +2810,148 @@ class CanaisConfigButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
+        logger.info(f"Botão Canais clicado por {interaction.user} no /configurações")
+        await render_canais_config_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+def build_v2_canais_config_layout(guild_id: int, user_id: int):
+    """Constrói o painel V2 de Canais (/configurações -> Canais) com 3 ChannelSelects e botão Voltar."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        logs_cfg = cfg.get("logs", {})
+        text = format_canais_config_panel_text(gid_str)
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = (
+            discord.ui.Separator(visible=True)
+            if spacing_arg is None
+            else discord.ui.Separator(visible=True, spacing=spacing_arg)
+        )
+
+        row_abertos = discord.ui.ActionRow(
+            LogsCanalSelect(
+                guild_id,
+                user_id,
+                log_key="canal_abertos_id",
+                placeholder="Canal Logs de tickets abertos...",
+                custom_id="select_config_canal_abertos",
+                current_channel_id=logs_cfg.get("canal_abertos_id"),
+            )
+        )
+        row_fechados = discord.ui.ActionRow(
+            LogsCanalSelect(
+                guild_id,
+                user_id,
+                log_key="canal_fechados_id",
+                placeholder="Canal Logs de tickets fechados...",
+                custom_id="select_config_canal_fechados",
+                current_channel_id=logs_cfg.get("canal_fechados_id"),
+            )
+        )
+        row_assumidos = discord.ui.ActionRow(
+            LogsCanalSelect(
+                guild_id,
+                user_id,
+                log_key="canal_assumidos_id",
+                placeholder="Canal Logs de tickets assumidos...",
+                custom_id="select_config_canal_assumidos",
+                current_channel_id=logs_cfg.get("canal_assumidos_id"),
+            )
+        )
+        row_voltar = discord.ui.ActionRow(VoltarParaConfiguracoesButton(guild_id, user_id))
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            row_abertos,
+            row_fechados,
+            row_assumidos,
+            row_voltar,
+            accent_colour=config.EMBED_COLOR_DEFAULT
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de Canais (/configurações): {e}")
+        return None
+
+
+async def render_canais_config_panel(
+    interaction: discord.Interaction,
+    guild_id: int,
+    user_id: int,
+    is_edit: bool = True
+):
+    """Renderiza o painel efêmero de Canais dentro do fluxo /configurações."""
+    gid_str = str(guild_id or "direct")
+    v2_view = build_v2_canais_config_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
+            else:
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel Canais (/configurações) enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de Canais: {e}. Usando fallback.")
+
+    cfg = CloudStorage.get_guild_config(gid_str)
+    logs_cfg = cfg.get("logs", {})
+    embed = discord.Embed(
+        description=format_canais_config_panel_text(gid_str),
+        color=config.EMBED_COLOR_DEFAULT
+    )
+    view = discord.ui.View(timeout=None)
+    view.add_item(LogsCanalSelect(
+        guild_id,
+        user_id,
+        log_key="canal_abertos_id",
+        placeholder="Canal Logs de tickets abertos...",
+        custom_id="select_config_canal_abertos",
+        current_channel_id=logs_cfg.get("canal_abertos_id"),
+    ))
+    view.add_item(LogsCanalSelect(
+        guild_id,
+        user_id,
+        log_key="canal_fechados_id",
+        placeholder="Canal Logs de tickets fechados...",
+        custom_id="select_config_canal_fechados",
+        current_channel_id=logs_cfg.get("canal_fechados_id"),
+    ))
+    view.add_item(LogsCanalSelect(
+        guild_id,
+        user_id,
+        log_key="canal_assumidos_id",
+        placeholder="Canal Logs de tickets assumidos...",
+        custom_id="select_config_canal_assumidos",
+        current_channel_id=logs_cfg.get("canal_assumidos_id"),
+    ))
+    view.add_item(VoltarParaConfiguracoesButton(guild_id, user_id))
+    if is_edit:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 def build_v2_configuracoes_layout(guild_id: int, user_id: int):
@@ -2709,7 +2971,7 @@ def build_v2_configuracoes_layout(guild_id: int, user_id: int):
         )
 
         container_items: List[Any] = []
-        if hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem"):
+        if hasattr(discord.ui, "MediaGallery") and hasattr(discord.ui, "MediaGalleryItem"):
             container_items.append(
                 discord.ui.MediaGallery(discord.MediaGalleryItem(media=MAIN_PANEL_BANNER_URL))
             )
@@ -2730,12 +2992,23 @@ def build_v2_configuracoes_layout(guild_id: int, user_id: int):
         return None
 
 
-async def render_configuracoes_panel(interaction: discord.Interaction, guild_id: int, user_id: int):
+async def render_configuracoes_panel(
+    interaction: discord.Interaction,
+    guild_id: int,
+    user_id: int,
+    is_edit: bool = False
+):
     """Renderiza o painel efêmero do comando /configurações."""
     v2_view = build_v2_configuracoes_layout(guild_id, user_id)
     if v2_view is not None:
         try:
-            await interaction.response.send_message(view=v2_view, ephemeral=True)
+            if is_edit:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel /configurações enviado com Componentes V2 (Container)")
             return
         except discord.NotFound as e:
@@ -2754,7 +3027,13 @@ async def render_configuracoes_panel(interaction: discord.Interaction, guild_id:
     embed.set_image(url=MAIN_PANEL_BANNER_URL)
     view = discord.ui.View(timeout=None)
     view.add_item(CanaisConfigButton(guild_id, user_id))
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    if is_edit:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 # =====================================================================
