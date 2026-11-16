@@ -73,6 +73,8 @@ else:
                 payload["description"] = self.description
             return payload
 
+MAIN_PANEL_BANNER_URL = "https://raw.githubusercontent.com/bsstore48-bot/NiveSalers/main/assets/banners/painel_principal.png"
+
 # 10 cores predefinidas para a embed/container do painel
 CORES_DISPONIVEIS = [
     {"label": "Branco (Padrão)", "value": "FFFFFF", "hex": "#FFFFFF", "int": 0xFFFFFF, "desc": "Estilo limpo e minimalista"},
@@ -1539,10 +1541,18 @@ def build_v2_main_layout(guild_id: int, user_id: int):
         spacing_arg = separator_spacing.small if separator_spacing else None
         separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
 
-        container = discord.ui.Container(
+        container_items: List[Any] = []
+        if hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem"):
+            container_items.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(media=MAIN_PANEL_BANNER_URL))
+            )
+        container_items.extend([
             discord.ui.TextDisplay(text),
             separator,
             row,
+        ])
+        container = discord.ui.Container(
+            *container_items,
             accent_colour=config.EMBED_COLOR_DEFAULT
         )
         layout_view.add_item(container)
@@ -1894,6 +1904,7 @@ async def render_main_panel(interaction: discord.Interaction, guild_id: int, use
 
     text = format_main_panel_text()
     embed = discord.Embed(description=text, color=config.EMBED_COLOR_DEFAULT)
+    embed.set_image(url=MAIN_PANEL_BANNER_URL)
     view = discord.ui.View(timeout=None)
     view.add_item(ConfigPainelSelect(guild_id, user_id))
 
