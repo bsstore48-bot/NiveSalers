@@ -2501,7 +2501,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                 gid_int,
                 self.user_id or interaction.user.id,
                 is_edit=True,
-                status_msg="⚠️ Nenhuma categoria foi configurada ainda. Crie pelo menos uma categoria em `/configurar painel` → **Configurações do sistema** → **Categorias**."
+                status_msg="⚠️ Nenhuma categoria foi configurada ainda. Crie pelo menos uma categoria em `/painel` → **Configurações do sistema** → **Categorias**."
             )
             return
 
@@ -2660,26 +2660,103 @@ async def render_set_painel(
 
 
 # =====================================================================
-# COMANDOS SLASH /configurar painel E /set painel
+# PAINEL DE CONFIGURAÇÕES ESSENCIAIS (/configurações)
 # =====================================================================
 
-class ConfigurarGroup(app_commands.Group):
-    """Grupo de comandos /configurar"""
-    def __init__(self):
-        super().__init__(name="configurar", description="Configurações do sistema de atendimento NiveSalers")
-
-    @app_commands.command(
-        name="painel",
-        description="Abre o painel de configuração dos painéis de atendimento com Componentes V2."
+def format_configuracoes_panel_text() -> str:
+    """Retorna o texto do painel do comando /configurações."""
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    return (
+        f"{emoji_info} Configure os canais, cargos, etc. "
+        "Configurações essenciais para a melhor funcionalidade do bot em seu servidor."
     )
-    @app_commands.default_permissions(administrator=True)
-    async def painel(self, interaction: discord.Interaction):
-        """Abre o painel com Componentes V2 e Container de Layout."""
-        guild_id = interaction.guild_id or 0
-        user_id = interaction.user.id
-        logger.info(f"Comando /configurar painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
-        await render_main_panel(interaction, guild_id, user_id, is_edit=False)
 
+
+class CanaisConfigButton(discord.ui.Button):
+    """Botão Canais do painel /configurações (ainda sem ação)."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Canais",
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_configuracoes_canais",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+
+def build_v2_configuracoes_layout(guild_id: int, user_id: int):
+    """Constrói o painel V2 do comando /configurações com banner e botão Canais."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        text = format_configuracoes_panel_text()
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = (
+            discord.ui.Separator(visible=True)
+            if spacing_arg is None
+            else discord.ui.Separator(visible=True, spacing=spacing_arg)
+        )
+
+        container_items: List[Any] = []
+        if hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem"):
+            container_items.append(
+                discord.ui.MediaGallery(discord.MediaGalleryItem(media=MAIN_PANEL_BANNER_URL))
+            )
+        container_items.extend([
+            discord.ui.TextDisplay(text),
+            separator,
+            discord.ui.ActionRow(CanaisConfigButton(guild_id, user_id)),
+        ])
+
+        container = discord.ui.Container(
+            *container_items,
+            accent_colour=config.EMBED_COLOR_DEFAULT
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de /configurações: {e}")
+        return None
+
+
+async def render_configuracoes_panel(interaction: discord.Interaction, guild_id: int, user_id: int):
+    """Renderiza o painel efêmero do comando /configurações."""
+    v2_view = build_v2_configuracoes_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel /configurações enviado com Componentes V2 (Container)")
+            return
+        except discord.NotFound as e:
+            elapsed = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+            if getattr(e, "code", None) == 10062 and elapsed < 2.5:
+                logger.critical(f"[DUPLICATE INSTANCE] 10062 Unknown interaction em {elapsed:.3f}s no /configurações!")
+                return
+            logger.warning(f"Aviso ao enviar LayoutView v2 de /configurações: {e}. Usando fallback.")
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de /configurações: {e}. Usando fallback.")
+
+    embed = discord.Embed(
+        description=format_configuracoes_panel_text(),
+        color=config.EMBED_COLOR_DEFAULT
+    )
+    embed.set_image(url=MAIN_PANEL_BANNER_URL)
+    view = discord.ui.View(timeout=None)
+    view.add_item(CanaisConfigButton(guild_id, user_id))
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+# =====================================================================
+# COMANDOS SLASH /painel, /configurações E /set painel
+# =====================================================================
 
 class SetGroup(app_commands.Group):
     """Grupo de comandos /set"""
@@ -2704,11 +2781,33 @@ class TicketPanelCog(commands.Cog, name="PainelConfig"):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.configurar_group = ConfigurarGroup()
         self.set_group = SetGroup()
-        self.bot.tree.add_command(self.configurar_group)
         self.bot.tree.add_command(self.set_group)
         logger.info("TicketPanelCog carregado com sucesso")
+
+    @app_commands.command(
+        name="painel",
+        description="Abre o painel de configuração dos painéis de atendimento com Componentes V2."
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def painel(self, interaction: discord.Interaction):
+        """Abre o painel com Componentes V2 e Container de Layout."""
+        guild_id = interaction.guild_id or 0
+        user_id = interaction.user.id
+        logger.info(f"Comando /painel executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
+        await render_main_panel(interaction, guild_id, user_id, is_edit=False)
+
+    @app_commands.command(
+        name="configurações",
+        description="Configure canais, cargos e definições essenciais do bot no servidor."
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def configuracoes(self, interaction: discord.Interaction):
+        """Abre o painel de configurações essenciais do servidor."""
+        guild_id = interaction.guild_id or 0
+        user_id = interaction.user.id
+        logger.info(f"Comando /configurações executado por {interaction.user} (ID: {user_id}) na guilda {guild_id}")
+        await render_configuracoes_panel(interaction, guild_id, user_id)
 
     @commands.Cog.listener("on_interaction")
     async def on_public_ticket_interaction(self, interaction: discord.Interaction):

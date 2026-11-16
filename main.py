@@ -38,7 +38,7 @@ async def on_ready():
     try:
         activity = discord.Activity(
             type=discord.ActivityType.watching,
-            name="atendimentos | /configurar"
+            name="atendimentos | /painel"
         )
         await bot.change_presence(status=discord.Status.online, activity=activity)
     except Exception as e:
