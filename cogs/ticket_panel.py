@@ -5,6 +5,7 @@ modais com suporte nativo a componentes de upload de arquivo.
 """
 
 import logging
+import uuid
 from typing import Dict, Any, List, Optional
 import discord
 from discord import app_commands
@@ -158,15 +159,33 @@ def format_settings_panel_text() -> str:
     return "\n".join(lines)
 
 
-def format_categories_panel_text() -> str:
-    """Retorna o texto do painel de categorias."""
+def format_categories_panel_text(guild_id: str) -> str:
+    """Retorna o texto do painel de categorias com as categorias cadastradas no servidor."""
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_folder = EmojiManager.get("folder", fallback="<:folder:1561907786986561586>")
+
+    cfg = CloudStorage.get_guild_config(guild_id)
+    categorias = cfg.get("categorias_ticket", [])
 
     lines = [
         f"## {emoji_bot} Categorias\n",
         f"> {emoji_info} Use os botões abaixo para criar, editar e remover categorias do sistema de atendimento do seu servidor."
     ]
+
+    if not categorias:
+        lines.append(f"> {emoji_folder} Categorias existentes: Nenhuma categoria criada.")
+    else:
+        lines.append(f"> {emoji_folder} Categorias existentes:")
+        for idx, cat in enumerate(categorias, 1):
+            nome = cat.get("nome", "Sem nome")
+            desc = cat.get("descricao", "")
+            canal_id = cat.get("canal_topicos_id")
+            cargos_ids = cat.get("cargos_permitidos_ids", [])
+            canal_fmt = f"<#{canal_id}>" if canal_id else "Não definido"
+            cargos_fmt = ", ".join(f"<@&{rid}>" for rid in cargos_ids) if cargos_ids else "Nenhum"
+            lines.append(f"\n**{idx}. {nome}** — {desc}\nCanal: {canal_fmt} | Cargos: {cargos_fmt}")
+
     return "\n".join(lines)
 
 
@@ -411,6 +430,131 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
             await interaction.response.send_message(f"Ocorreu um erro no upload da thumbnail: {error}", ephemeral=True)
 
 
+class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
+    """Modal com 4 abas (Label Type 18) para criar uma nova categoria de atendimento."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    def to_components(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": 18,
+                "label": "Nome da categoria",
+                "description": "Nome exibido na opção do painel de atendimento",
+                "component": {
+                    "type": 4,
+                    "custom_id": "cat_nome",
+                    "style": 1,
+                    "placeholder": "Ex: Suporte Técnico",
+                    "min_length": 1,
+                    "max_length": 50,
+                    "required": True
+                }
+            },
+            {
+                "type": 18,
+                "label": "Descrição da categoria",
+                "description": "Descrição breve (~25 caracteres) exibida no painel público",
+                "component": {
+                    "type": 4,
+                    "custom_id": "cat_descricao",
+                    "style": 1,
+                    "placeholder": "Ex: Tire suas dúvidas aqui",
+                    "min_length": 1,
+                    "max_length": 50,
+                    "required": True
+                }
+            },
+            {
+                "type": 18,
+                "label": "Canal de tópicos",
+                "description": "Onde o bot abrirá os tópicos privados de atendimento",
+                "component": {
+                    "type": 8,
+                    "custom_id": "cat_canal_topicos",
+                    "placeholder": "Selecione o canal de texto...",
+                    "channel_types": [0, 5],
+                    "min_values": 1,
+                    "max_values": 1,
+                    "required": True
+                }
+            },
+            {
+                "type": 18,
+                "label": "Cargos permitidos",
+                "description": "Cargos que poderão participar dos tópicos privados",
+                "component": {
+                    "type": 6,
+                    "custom_id": "cat_cargos_permitidos",
+                    "placeholder": "Selecione os cargos permitidos...",
+                    "min_values": 1,
+                    "max_values": 10,
+                    "required": True
+                }
+            }
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "custom_id": self.custom_id,
+            "components": self.to_components()
+        }
+
+    async def on_submit(self, interaction: discord.Interaction):
+        nome = ""
+        descricao = ""
+        canal_id = None
+        cargos_ids: List[str] = []
+
+        for wrapper in interaction.data.get("components", []):
+            if wrapper.get("type") == 18 and isinstance(wrapper.get("component"), dict):
+                inner_list = [wrapper["component"]]
+            elif wrapper.get("type") == 1 and isinstance(wrapper.get("components"), list):
+                inner_list = wrapper["components"]
+            else:
+                inner_list = [wrapper]
+
+            for comp in inner_list:
+                cid = comp.get("custom_id")
+                if cid == "cat_nome":
+                    nome = (comp.get("value") or "").strip()
+                elif cid == "cat_descricao":
+                    descricao = (comp.get("value") or "").strip()
+                elif cid == "cat_canal_topicos":
+                    vals = comp.get("values") or []
+                    if vals:
+                        canal_id = str(vals[0])
+                elif cid == "cat_cargos_permitidos":
+                    vals = comp.get("values") or []
+                    cargos_ids = [str(v) for v in vals]
+
+        gid_str = str(self.guild_id or interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        if not isinstance(cfg.get("categorias_ticket"), list):
+            cfg["categorias_ticket"] = []
+
+        nova_categoria = {
+            "id": uuid.uuid4().hex[:8],
+            "nome": nome,
+            "descricao": descricao,
+            "canal_topicos_id": canal_id,
+            "cargos_permitidos_ids": cargos_ids
+        }
+        cfg["categorias_ticket"].append(nova_categoria)
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+        logger.info(f"Nova categoria '{nome}' criada por {interaction.user} na guilda {gid_str}")
+        await render_categories_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id, is_edit=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        logger.error(f"Erro no modal de criar categoria: {error}", exc_info=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"Ocorreu um erro ao criar categoria: {error}", ephemeral=True)
+
+
 # =====================================================================
 # BOTÕES DO PAINEL DE APARÊNCIA (SUBCLASSES COM CALLBACK PRÓPRIO)
 # =====================================================================
@@ -524,7 +668,7 @@ class CategoriasButton(discord.ui.Button):
 
 
 class CriarCategoriaButton(discord.ui.Button):
-    """Botão verde Criar categoria (sem ação por enquanto)."""
+    """Botão verde Criar categoria (abre o modal de criação)."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Criar categoria",
@@ -537,8 +681,10 @@ class CriarCategoriaButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Botão Criar categoria clicado por {interaction.user} (sem ação por enquanto)")
-        await interaction.response.defer()
+        logger.info(f"Botão Criar categoria clicado por {interaction.user} (abrindo modal)")
+        await interaction.response.send_modal(
+            CriarCategoriaModal(self.guild_id or (interaction.guild_id or 0), interaction.user.id)
+        )
 
 
 class RemoverCategoriaButton(discord.ui.Button):
@@ -923,7 +1069,7 @@ def build_v2_categories_layout(guild_id: int, user_id: int):
         gid_str = str(guild_id or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
         cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-        text = format_categories_panel_text()
+        text = format_categories_panel_text(gid_str)
 
         layout_view = discord.ui.LayoutView(timeout=None)
 
@@ -1105,7 +1251,7 @@ async def render_categories_panel(interaction: discord.Interaction, guild_id: in
     gid_str = str(guild_id or "direct")
     cfg = CloudStorage.get_guild_config(gid_str)
     cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
-    text = format_categories_panel_text()
+    text = format_categories_panel_text(gid_str)
     embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
     view.add_item(CriarCategoriaButton(guild_id, user_id))

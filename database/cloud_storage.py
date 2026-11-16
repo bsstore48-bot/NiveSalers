@@ -71,14 +71,7 @@ class CloudStorage:
                 "atualizacao_automatica": True,
                 "paineis_enviados": []
             },
-            "categorias_ticket": [
-                {
-                    "id": "suporte_geral",
-                    "nome": "Suporte Geral",
-                    "descricao": "Tire suas dúvidas ou solicite suporte.",
-                    "emoji": "information"
-                }
-            ],
+            "categorias_ticket": [],
             "logs": {
                 "canal_logs_id": None,
                 "transcripts_ativo": True
