@@ -20,6 +20,8 @@ MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or ""
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "bsstore48-bot/NiveSalers").strip()
+HF_DB_TOKEN = (os.environ.get("HF_DB_TOKEN") or os.environ.get("HF_TOKEN") or "").strip()
+HF_DB_REPO = os.environ.get("HF_DB_REPO", "voidmc/nivebots-db").strip()
 
 # Cor padrão das embeds do sistema (Branco puro 0xFFFFFF)
 EMBED_COLOR_DEFAULT = 0xFFFFFF
