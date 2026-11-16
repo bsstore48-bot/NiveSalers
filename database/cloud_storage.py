@@ -29,6 +29,9 @@ class CloudStorage:
     _hf_dirty: bool = False
     _hf_worker_running: bool = False
     _hf_sync_task: Optional[asyncio.Task] = None
+    _hf_poll_task: Optional[asyncio.Task] = None
+    _dirty_guilds: set = set()
+    _last_remote_hash: Optional[str] = None
 
     @classmethod
     def _merge_defaults(cls, guild_id: str, loaded: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -76,10 +79,18 @@ class CloudStorage:
 
         # 3. Se configurado Hugging Face Dataset privado, restaura dados da nuvem (prioritário)
         elif config.HF_DB_TOKEN and config.HF_DB_REPO:
+            synced = False
             try:
-                await cls._sync_from_hf_dataset()
+                synced = await cls._sync_from_hf_dataset()
             except Exception as e:
                 logger.warning(f"Aviso ao consultar backup no Hugging Face Dataset: {e}")
+            if not synced and config.GITHUB_TOKEN:
+                try:
+                    await cls._sync_from_github()
+                except Exception as e:
+                    logger.warning(f"Aviso ao consultar backup fallback no GitHub: {e}")
+            if cls._hf_poll_task is None or cls._hf_poll_task.done():
+                cls._hf_poll_task = asyncio.create_task(cls._hf_background_poll())
 
         # 4. Se configurado GitHub Token, tenta restaurar dados de backup da nuvem GitHub
         elif config.GITHUB_TOKEN:
@@ -172,6 +183,7 @@ class CloudStorage:
 
         # 3. Sincroniza com Hugging Face Dataset privado em segundo plano (serializado)
         elif config.HF_DB_TOKEN and config.HF_DB_REPO:
+            cls._dirty_guilds.add(gid)
             cls._trigger_hf_sync()
 
         # 4. Dispara sincronização com GitHub em segundo plano se configurado
@@ -226,11 +238,10 @@ class CloudStorage:
             logger.error(f"Erro ao sincronizar do MongoDB: {e}")
 
     @classmethod
-    async def _sync_from_hf_dataset(cls) -> None:
-        """Restaura backup da nuvem a partir do Dataset privado no Hugging Face Hub (sobrescreve cache local)."""
+    async def _fetch_hf_remote_dict(cls, session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
+        """Busca o JSON atual do Hugging Face Dataset sem sobrescrever memória diretamente."""
         if not config.HF_DB_TOKEN or not config.HF_DB_REPO:
-            return
-
+            return None
         url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/resolve/main/cloud_backup.json?t={int(time.time() * 1000)}"
         headers = {
             "Authorization": f"Bearer {config.HF_DB_TOKEN}",
@@ -238,27 +249,78 @@ class CloudStorage:
             "Pragma": "no-cache",
             "User-Agent": "NiveSalers-Bot"
         }
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                raw_text = await resp.text()
+                cls._last_remote_hash = str(hash(raw_text))
+                data = json.loads(raw_text)
+                return data if isinstance(data, dict) else None
+            elif resp.status == 404:
+                return {}
+            else:
+                body = await resp.text()
+                logger.warning(f"Resposta inesperada ao ler HF Dataset ({resp.status}): {body[:200]}")
+                return None
 
+    @classmethod
+    async def _sync_from_hf_dataset(cls) -> bool:
+        """Restaura backup da nuvem a partir do Dataset privado no Hugging Face Hub."""
+        if not config.HF_DB_TOKEN or not config.HF_DB_REPO:
+            return False
         try:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 200:
-                        raw_text = await resp.text()
-                        remote_data = json.loads(raw_text)
-                        if isinstance(remote_data, dict):
-                            for gid, cfg in remote_data.items():
-                                gid_str = str(gid)
-                                cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
-                            logger.info(f"Backup restaurado do Hugging Face Dataset ({config.HF_DB_REPO}): {len(remote_data)} servidor(es).")
-                            cls._save_to_local_disk()
-                    elif resp.status == 404:
-                        logger.info("Nenhum backup anterior encontrado no Hugging Face Dataset (primeira execução).")
-                    else:
-                        body = await resp.text()
-                        logger.warning(f"Resposta inesperada ao ler HF Dataset ({resp.status}): {body[:200]}")
+                remote_data = await cls._fetch_hf_remote_dict(session)
+                if remote_data is None:
+                    return False
+                if remote_data:
+                    for gid, cfg in remote_data.items():
+                        gid_str = str(gid)
+                        if gid_str not in cls._dirty_guilds:
+                            cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
+                    logger.info(f"Backup restaurado do Hugging Face Dataset ({config.HF_DB_REPO}): {len(remote_data)} servidor(es).")
+                    cls._save_to_local_disk()
+                else:
+                    logger.info("Nenhum backup anterior encontrado no Hugging Face Dataset (primeira execução).")
+                return True
         except Exception as e:
             logger.warning(f"Aviso ao restaurar backup do Hugging Face Dataset: {e}")
+            return False
+
+    @classmethod
+    async def _hf_background_poll(cls) -> None:
+        """Mantém o cache em memória sincronizado com o HF Dataset caso outra instância salve alterações."""
+        while True:
+            await asyncio.sleep(20)
+            if cls._hf_dirty or cls._hf_worker_running or cls._dirty_guilds:
+                continue
+            try:
+                timeout = aiohttp.ClientTimeout(total=12)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/resolve/main/cloud_backup.json?t={int(time.time() * 1000)}"
+                    headers = {
+                        "Authorization": f"Bearer {config.HF_DB_TOKEN}",
+                        "Cache-Control": "no-cache, no-store, max-age=0",
+                        "Pragma": "no-cache",
+                        "User-Agent": "NiveSalers-Bot"
+                    }
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            raw_text = await resp.text()
+                            new_hash = str(hash(raw_text))
+                            if new_hash != cls._last_remote_hash:
+                                remote_data = json.loads(raw_text)
+                                if isinstance(remote_data, dict):
+                                    for gid, cfg in remote_data.items():
+                                        gid_str = str(gid)
+                                        if gid_str not in cls._dirty_guilds:
+                                            cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
+                                    cls._last_remote_hash = new_hash
+                                    cls._save_to_local_disk()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
 
     @classmethod
     def _build_hf_commit_payload(cls) -> bytes:
@@ -304,6 +366,16 @@ class CloudStorage:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 while cls._hf_dirty:
                     cls._hf_dirty = False
+                    dirty_batch = set(cls._dirty_guilds)
+                    try:
+                        remote_data = await cls._fetch_hf_remote_dict(session)
+                        if isinstance(remote_data, dict):
+                            for gid, cfg in remote_data.items():
+                                gid_str = str(gid)
+                                if gid_str not in dirty_batch and gid_str not in cls._dirty_guilds:
+                                    cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
+                    except Exception:
+                        pass
                     payload_bytes = cls._build_hf_commit_payload()
 
                     saved = False
@@ -312,6 +384,8 @@ class CloudStorage:
                             async with session.post(url, headers=headers, data=payload_bytes) as resp:
                                 if resp.status in (200, 201):
                                     logger.info(f"Configurações persistidas no Hugging Face Dataset ({config.HF_DB_REPO}).")
+                                    cls._dirty_guilds.difference_update(dirty_batch)
+                                    cls._last_remote_hash = None
                                     saved = True
                                     break
                                 else:
