@@ -2666,9 +2666,11 @@ async def render_set_painel(
 def format_configuracoes_panel_text() -> str:
     """Retorna o texto do painel do comando /configurações."""
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_cloud = EmojiManager.get("cloud", fallback="<:cloud:1561906158984233031>")
     return (
-        f"{emoji_info} Configure os canais, cargos, etc. "
-        "Configurações essenciais para a melhor funcionalidade do bot em seu servidor."
+        f"> {emoji_info} Configure os canais, cargos, etc. "
+        "Configurações essenciais para a melhor funcionalidade do bot em seu servidor.\n"
+        f"> {emoji_cloud} Todas as configurações são salvas na hora."
     )
 
 
@@ -2677,6 +2679,7 @@ class CanaisConfigButton(discord.ui.Button):
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Canais",
+            emoji=resolve_partial_emoji("double_speech", "💬"),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_configuracoes_canais",
             row=0

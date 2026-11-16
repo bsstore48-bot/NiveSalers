@@ -99,5 +99,11 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "on",
         "tag": "<:on:1561908741073281054>",
         "fallback": "🟢"
+    },
+    "double_speech": {
+        "id": "1561906215834091660",
+        "name": "double_speech",
+        "tag": "<:double_speech:1561906215834091660>",
+        "fallback": "💬"
     }
 }
