@@ -2280,32 +2280,6 @@ async def render_edit_category_panel(interaction: discord.Interaction, guild_id:
 _handled_public_interactions: List[int] = []
 
 
-def build_v2_ticket_created_layout(
-    thread_mention: str,
-    accent_color: int,
-    emoji_correto: str,
-    emoji_ban: str,
-):
-    """Constrói a mensagem efêmera em Components V2 confirmando a criação do ticket."""
-    if not HAS_COMPONENTS_V2:
-        return None
-    try:
-        text = (
-            f"{emoji_correto} Seu ticket foi criado com sucesso!\n"
-            f"{emoji_ban} {thread_mention}"
-        )
-        layout_view = discord.ui.LayoutView(timeout=None)
-        container = discord.ui.Container(
-            discord.ui.TextDisplay(text),
-            accent_colour=accent_color
-        )
-        layout_view.add_item(container)
-        return layout_view
-    except Exception as e:
-        logger.warning(f"Erro ao instanciar LayoutView v2 de ticket criado: {e}")
-        return None
-
-
 def build_v2_ticket_welcome_layout(
     user_mention: str,
     cat_nome: str,
@@ -2490,19 +2464,6 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
     logger.info(
         f"Ticket aberto por {interaction.user} na categoria '{cat_nome}' -> tópico {thread.name} ({thread.id}) na guilda {gid_str}"
     )
-
-    confirm_v2 = build_v2_ticket_created_layout(
-        thread_mention=thread.mention,
-        accent_color=accent_color,
-        emoji_correto=emoji_correto,
-        emoji_ban=emoji_ban,
-    )
-    if confirm_v2 is not None:
-        try:
-            await interaction.followup.send(view=confirm_v2, ephemeral=True)
-            return
-        except Exception as e:
-            logger.warning(f"Aviso ao enviar confirmação V2 de ticket criado: {e}. Usando fallback.")
 
     await interaction.followup.send(
         content=f"{emoji_correto} Seu ticket foi criado com sucesso!\n{emoji_ban} {thread.mention}",
