@@ -151,7 +151,7 @@ def format_settings_panel_text() -> str:
     emoji_settings = EmojiManager.get("settings", fallback="<:settings:1561908832173826048>")
 
     lines = [
-        f"## {emoji_bot} Painel de configurações do painel\n",
+        f"## {emoji_bot} Painel de configurações do sistema\n",
         f"> {emoji_info} Clique nos botões abaixo para configurar funcionalidades.",
         f"> {emoji_settings} Tudo isso que é possível configurar por aqui pode ser essencial para a melhor experiência do seu servidor."
     ]
@@ -488,14 +488,32 @@ class CorButton(discord.ui.Button):
         await render_cor_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id or interaction.user.id, is_edit=True)
 
 
-class VoltarParaPrincipalButton(discord.ui.Button):
+class CategoriasButton(discord.ui.Button):
+    """Botão Categorias do painel de configurações do sistema (sem ação por enquanto)."""
     def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Categorias",
+            emoji=resolve_partial_emoji("folder", "📁"),
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_sistema_categorias",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Categorias clicado por {interaction.user} (sem ação por enquanto)")
+        await interaction.response.defer()
+
+
+class VoltarParaPrincipalButton(discord.ui.Button):
+    def __init__(self, guild_id: int, user_id: int, row: int = 2, custom_id: str = "btn_aparencia_voltar"):
         super().__init__(
             label="Voltar",
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,  # Sempre Azul (Primary)
-            custom_id="btn_aparencia_voltar",
-            row=2  # Última fila separada exclusivamente para o botão Voltar
+            custom_id=custom_id,
+            row=row  # Última fila separada exclusivamente para o botão Voltar
         )
         self.guild_id = guild_id
         self.user_id = user_id
@@ -596,9 +614,9 @@ class ConfigPainelSelect(discord.ui.Select):
                 emoji=emoji_aparencia
             ),
             discord.SelectOption(
-                label="Configurações do painel",
+                label="Configurações do sistema",
                 value="configuracoes",
-                description="Defina canais, categorias e permissões do atendimento",
+                description="Defina categorias, canais e funcionalidades do sistema",
                 emoji=emoji_config
             )
         ]
@@ -760,8 +778,8 @@ def build_v2_cor_layout(guild_id: int, user_id: int):
 
 def build_v2_settings_layout(guild_id: int, user_id: int):
     """
-    Constrói a árvore de LayoutView com Container para o painel de configurações do painel.
-    Sem botões e sem select menus por enquanto.
+    Constrói a árvore de LayoutView com Container para o painel de configurações do sistema.
+    Contém o botão Categorias (sem ação) e o botão Voltar azul na última linha separada.
     """
     if not HAS_COMPONENTS_V2:
         return None
@@ -773,14 +791,29 @@ def build_v2_settings_layout(guild_id: int, user_id: int):
         text = format_settings_panel_text()
 
         layout_view = discord.ui.LayoutView(timeout=None)
+
+        row1 = discord.ui.ActionRow(
+            CategoriasButton(guild_id, user_id)
+        )
+        row_voltar = discord.ui.ActionRow(
+            VoltarParaPrincipalButton(guild_id, user_id, row=1, custom_id="btn_sistema_voltar")
+        )
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
         container = discord.ui.Container(
             discord.ui.TextDisplay(text),
+            separator,
+            row1,
+            row_voltar,
             accent_colour=cor_embed
         )
         layout_view.add_item(container)
         return layout_view
     except Exception as e:
-        logger.warning(f"Erro ao instanciar LayoutView v2 de configurações: {e}")
+        logger.warning(f"Erro ao instanciar LayoutView v2 de configurações do sistema: {e}")
         return None
 
 
@@ -887,7 +920,7 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
 
 
 async def render_settings_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
-    """Renderiza o painel de configurações do painel (sem botões nem select menus por enquanto)."""
+    """Renderiza o painel de configurações do sistema com Componentes V2 (Container + Categorias + Voltar)."""
     v2_view = build_v2_settings_layout(guild_id, user_id)
     if v2_view is not None:
         try:
@@ -895,24 +928,27 @@ async def render_settings_panel(interaction: discord.Interaction, guild_id: int,
                 await interaction.response.edit_message(view=v2_view)
             else:
                 await interaction.response.send_message(view=v2_view, ephemeral=True)
-            logger.info("Painel de configurações enviado com Componentes V2 (Container)")
+            logger.info("Painel de configurações do sistema enviado com Componentes V2 (Container)")
             return
         except Exception as e:
-            logger.warning(f"Aviso ao enviar LayoutView v2 de configurações: {e}. Usando fallback.")
+            logger.warning(f"Aviso ao enviar LayoutView v2 de configurações do sistema: {e}. Usando fallback.")
 
     gid_str = str(guild_id or "direct")
     cfg = CloudStorage.get_guild_config(gid_str)
     cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
     text = format_settings_panel_text()
     embed = discord.Embed(description=text, color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    view.add_item(CategoriasButton(guild_id, user_id))
+    view.add_item(VoltarParaPrincipalButton(guild_id, user_id, row=1, custom_id="btn_sistema_voltar"))
 
     if is_edit:
         if not interaction.response.is_done():
-            await interaction.response.edit_message(embed=embed, view=None)
+            await interaction.response.edit_message(embed=embed, view=view)
         else:
-            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=None)
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
     else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 # =====================================================================
