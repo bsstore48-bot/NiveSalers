@@ -2306,6 +2306,54 @@ def format_ticket_welcome_text(
     )
 
 
+class TicketControlSelect(discord.ui.Select):
+    """Select Menu de gerenciamento dentro do painel do tópico do ticket."""
+    def __init__(self, thread_id: int, guild_id: int):
+        self.thread_id = thread_id
+        self.guild_id = guild_id
+        options = [
+            discord.SelectOption(
+                label="Assumir",
+                value="assumir",
+                description="Assumir o atendimento deste ticket",
+                emoji=resolve_partial_emoji("rocket", "🚀"),
+            ),
+            discord.SelectOption(
+                label="Fechar ticket",
+                value="fechar",
+                description="Encerrar e fechar este ticket",
+                emoji=resolve_partial_emoji("lock", "🔒"),
+            ),
+            discord.SelectOption(
+                label="Puxar membro",
+                value="puxar_membro",
+                description="Dar acesso a um membro neste tópico",
+                emoji=resolve_partial_emoji("member", "👤"),
+            ),
+            discord.SelectOption(
+                label="Renomear",
+                value="renomear",
+                description="Mudar o nome do tópico deste ticket",
+                emoji=resolve_partial_emoji("edit", "✏️"),
+            ),
+        ]
+        super().__init__(
+            placeholder="Gerenciar ticket...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="select_ticket_painel_acoes",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await handle_ticket_panel_action(
+            interaction,
+            str(self.values[0]),
+            self.guild_id or (interaction.guild_id or 0),
+            self.thread_id or (interaction.channel_id or 0),
+        )
+
+
 def build_v2_ticket_welcome_layout(
     user_mention: str,
     cat_nome: str,
@@ -2313,8 +2361,10 @@ def build_v2_ticket_welcome_layout(
     data_criacao: str,
     horario_criacao: str,
     accent_color: int,
+    thread_id: int = 0,
+    guild_id: int = 0,
 ):
-    """Constrói o painel inicial em Components V2 dentro do tópico privado do ticket."""
+    """Constrói o painel inicial em Components V2 dentro do tópico privado do ticket com Select Menu de 4 ações."""
     if not HAS_COMPONENTS_V2:
         return None
     try:
@@ -2325,9 +2375,18 @@ def build_v2_ticket_welcome_layout(
             data_criacao=data_criacao,
             horario_criacao=horario_criacao,
         )
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = (
+            discord.ui.Separator(visible=True)
+            if spacing_arg is None
+            else discord.ui.Separator(visible=True, spacing=spacing_arg)
+        )
         layout_view = discord.ui.LayoutView(timeout=None)
         container = discord.ui.Container(
             discord.ui.TextDisplay(text),
+            separator,
+            discord.ui.ActionRow(TicketControlSelect(thread_id=thread_id, guild_id=guild_id)),
             accent_colour=accent_color
         )
         layout_view.add_item(container)
@@ -2335,6 +2394,484 @@ def build_v2_ticket_welcome_layout(
     except Exception as e:
         logger.warning(f"Erro ao instanciar LayoutView v2 de boas-vindas do ticket: {e}")
         return None
+
+
+class PuxarMembroUserSelect(discord.ui.UserSelect):
+    """User Select Menu em Components V2 para adicionar membros ao tópico privado."""
+    def __init__(self, thread_id: int, guild_id: int, accent_color: int):
+        self.thread_id = thread_id
+        self.guild_id = guild_id
+        self.accent_color = accent_color
+        super().__init__(
+            placeholder="Selecione o(s) membro(s) para puxar...",
+            min_values=1,
+            max_values=5,
+            custom_id=f"select_ticket_puxar_membro_{thread_id}",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        thread = interaction.channel
+        if thread is None or getattr(thread, "id", 0) != self.thread_id:
+            try:
+                thread = await interaction.client.fetch_channel(self.thread_id)
+            except Exception:
+                thread = interaction.channel
+
+        if thread is None or not hasattr(thread, "add_user"):
+            await interaction.edit_original_response(content="❌ Não foi possível acessar este tópico.")
+            return
+
+        added_mentions: List[str] = []
+        failed_names: List[str] = []
+        for user_obj in self.values:
+            try:
+                await thread.add_user(user_obj)
+                added_mentions.append(user_obj.mention)
+            except Exception as e:
+                logger.warning(f"Erro ao puxar {user_obj} para o tópico {self.thread_id}: {e}")
+                failed_names.append(getattr(user_obj, "display_name", str(user_obj)))
+
+        emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+        emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+        result_lines: List[str] = []
+        if added_mentions:
+            result_lines.append(
+                f"{emoji_correto} Membro(s) adicionado(s) ao tópico: {', '.join(added_mentions)}"
+            )
+            try:
+                await thread.send(
+                    f"{emoji_member} {', '.join(added_mentions)} foi adicionado(a) ao ticket por {interaction.user.mention}."
+                )
+            except Exception:
+                pass
+        if failed_names:
+            result_lines.append(f"⚠️ Não foi possível adicionar: {', '.join(failed_names)}")
+
+        final_msg = "\n".join(result_lines) or "❌ Nenhum membro foi adicionado."
+        if HAS_COMPONENTS_V2:
+            try:
+                done_view = discord.ui.LayoutView(timeout=None)
+                done_view.add_item(
+                    discord.ui.Container(discord.ui.TextDisplay(final_msg), accent_colour=self.accent_color)
+                )
+                await interaction.edit_original_response(view=done_view)
+                return
+            except Exception:
+                pass
+        await interaction.edit_original_response(content=final_msg, view=None)
+
+
+def build_v2_puxar_membro_layout(thread_id: int, guild_id: int, accent_color: int):
+    """Constrói o painel efêmero em Components V2 para puxar membro ao tópico."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+        emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+        text = (
+            f"## {emoji_member} Puxar membro\n\n"
+            f"> {emoji_info} Selecione no menu abaixo quem você deseja adicionar a este ticket."
+        )
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = (
+            discord.ui.Separator(visible=True)
+            if spacing_arg is None
+            else discord.ui.Separator(visible=True, spacing=spacing_arg)
+        )
+        layout_view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            discord.ui.ActionRow(PuxarMembroUserSelect(thread_id, guild_id, accent_color)),
+            accent_colour=accent_color
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de puxar membro: {e}")
+        return None
+
+
+class RenomearTicketModal(discord.ui.Modal, title="Renomear Ticket"):
+    """Modal para alterar o nome do tópico do ticket."""
+    novo_nome_input = discord.ui.TextInput(
+        label="Novo nome do tópico",
+        placeholder="Ex: suporte-resolvido",
+        min_length=1,
+        max_length=100,
+        required=True,
+    )
+
+    def __init__(self, thread_id: int, guild_id: int, current_name: str = "", accent_color: int = config.EMBED_COLOR_DEFAULT):
+        super().__init__(title="Renomear Ticket")
+        self.thread_id = thread_id
+        self.guild_id = guild_id
+        self.accent_color = accent_color
+        if current_name:
+            self.novo_nome_input.default = current_name[:100]
+
+    async def on_submit(self, interaction: discord.Interaction):
+        novo_nome = (self.novo_nome_input.value or "").strip()[:100]
+        if not novo_nome:
+            await interaction.response.send_message("❌ Informe um nome válido para o tópico.", ephemeral=True)
+            return
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        thread = interaction.channel
+        if thread is None or getattr(thread, "id", 0) != self.thread_id:
+            try:
+                thread = await interaction.client.fetch_channel(self.thread_id)
+            except Exception:
+                thread = interaction.channel
+
+        if thread is None or not hasattr(thread, "edit"):
+            await interaction.followup.send("❌ Não foi possível acessar o tópico.", ephemeral=True)
+            return
+
+        try:
+            await thread.edit(name=novo_nome, reason=f"Ticket renomeado por {interaction.user}")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Não tenho permissão para renomear este tópico.", ephemeral=True)
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"❌ Não foi possível renomear o tópico agora: {e}", ephemeral=True)
+            return
+
+        emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+        msg_txt = f"{emoji_correto} Tópico renomeado para **{novo_nome}**!"
+        if HAS_COMPONENTS_V2:
+            try:
+                done_view = discord.ui.LayoutView(timeout=None)
+                done_view.add_item(
+                    discord.ui.Container(discord.ui.TextDisplay(msg_txt), accent_colour=self.accent_color)
+                )
+                await interaction.followup.send(view=done_view, ephemeral=True)
+                return
+            except Exception:
+                pass
+        await interaction.followup.send(content=msg_txt, ephemeral=True)
+
+
+async def _reset_ticket_panel_select(
+    message: Optional[discord.Message],
+    ticket_data: Dict[str, Any],
+    accent_color: int,
+    guild_id: int,
+    thread_id: int,
+) -> None:
+    """Re-renderiza o painel do tópico para resetar a seleção do Select Menu."""
+    if message is None:
+        return
+    try:
+        assumed_by = ticket_data.get("assumed_by_id")
+        atendente_text = f"<@{assumed_by}>" if assumed_by else "Não assumido"
+        owner_id = ticket_data.get("owner_id")
+        user_mention = f"<@{owner_id}>" if owner_id else "Membro"
+        cat_nome = ticket_data.get("category_name") or "Atendimento"
+        data_criacao = ticket_data.get("data_criacao") or "--/--/----"
+        horario_criacao = ticket_data.get("horario_criacao") or "--:--"
+
+        v2 = build_v2_ticket_welcome_layout(
+            user_mention=user_mention,
+            cat_nome=cat_nome,
+            atendente_text=atendente_text,
+            data_criacao=data_criacao,
+            horario_criacao=horario_criacao,
+            accent_color=accent_color,
+            thread_id=thread_id,
+            guild_id=guild_id,
+        )
+        if v2 is not None:
+            await message.edit(view=v2, allowed_mentions=discord.AllowedMentions(users=True, roles=False))
+        else:
+            fallback_txt = format_ticket_welcome_text(
+                user_mention=user_mention,
+                cat_nome=cat_nome,
+                atendente_text=atendente_text,
+                data_criacao=data_criacao,
+                horario_criacao=horario_criacao,
+            )
+            fb_view = discord.ui.View(timeout=None)
+            fb_view.add_item(TicketControlSelect(thread_id=thread_id, guild_id=guild_id))
+            await message.edit(embed=discord.Embed(description=fallback_txt, color=accent_color), view=fb_view)
+    except Exception as e:
+        logger.debug(f"Aviso ao resetar Select Menu do ticket {thread_id}: {e}")
+
+
+_handled_ticket_action_interactions: List[int] = []
+
+
+async def handle_ticket_panel_action(
+    interaction: discord.Interaction,
+    action: str,
+    guild_id: int = 0,
+    thread_id: int = 0,
+) -> None:
+    """Processa as 4 ações do Select Menu no painel do tópico (funciona também após reinícios)."""
+    if interaction.id in _handled_ticket_action_interactions:
+        return
+    _handled_ticket_action_interactions.append(interaction.id)
+    if len(_handled_ticket_action_interactions) > 200:
+        del _handled_ticket_action_interactions[:100]
+
+    gid_int = guild_id or (interaction.guild_id or 0)
+    gid_str = str(gid_int or "direct")
+    tid_int = thread_id or (interaction.channel_id or 0)
+    tid_str = str(tid_int)
+
+    cfg = CloudStorage.get_guild_config(gid_str)
+    tickets_ativos = cfg.setdefault("tickets_ativos", {})
+    ticket_data = tickets_ativos.get(tid_str)
+
+    if not isinstance(ticket_data, dict):
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                ephemeral=True
+            )
+        return
+
+    # Verifica se o usuário possui algum cargo permitido da categoria (ou fallback global) ou é Administrador
+    allowed_ids = [str(r) for r in (ticket_data.get("allowed_role_ids") or []) if str(r).isdigit()]
+    if not allowed_ids:
+        allowed_ids = [str(r) for r in (cfg.get("cargos", {}).get("cargos_permitidos_ids") or []) if str(r).isdigit()]
+
+    member_role_ids = {str(r.id) for r in getattr(interaction.user, "roles", [])}
+    is_admin = bool(getattr(getattr(interaction.user, "guild_permissions", None), "administrator", False))
+    has_allowed_role = bool(member_role_ids & set(allowed_ids))
+
+    painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
+    accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    if not has_allowed_role and not is_admin:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "❌ Apenas membros com cargo permitido podem usar as opções deste ticket.",
+                ephemeral=True
+            )
+        asyncio.create_task(
+            _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+        )
+        return
+
+    assumed_by_id = ticket_data.get("assumed_by_id")
+
+    if action == "assumir":
+        if assumed_by_id:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"⚠️ Este ticket já foi assumido por <@{assumed_by_id}>.",
+                    ephemeral=True
+                )
+            asyncio.create_task(
+                _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+            )
+            return
+
+        ticket_data["assumed_by_id"] = str(interaction.user.id)
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+        owner_id = ticket_data.get("owner_id")
+        user_mention = f"<@{owner_id}>" if owner_id else "Membro"
+        cat_nome = ticket_data.get("category_name") or "Atendimento"
+        data_criacao = ticket_data.get("data_criacao") or "--/--/----"
+        horario_criacao = ticket_data.get("horario_criacao") or "--:--"
+        atendente_text = interaction.user.mention
+
+        updated_v2 = build_v2_ticket_welcome_layout(
+            user_mention=user_mention,
+            cat_nome=cat_nome,
+            atendente_text=atendente_text,
+            data_criacao=data_criacao,
+            horario_criacao=horario_criacao,
+            accent_color=accent_color,
+            thread_id=tid_int,
+            guild_id=gid_int,
+        )
+        if not interaction.response.is_done():
+            if updated_v2 is not None:
+                await interaction.response.edit_message(
+                    view=updated_v2,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False)
+                )
+            else:
+                fallback_txt = format_ticket_welcome_text(
+                    user_mention=user_mention,
+                    cat_nome=cat_nome,
+                    atendente_text=atendente_text,
+                    data_criacao=data_criacao,
+                    horario_criacao=horario_criacao,
+                )
+                fb_view = discord.ui.View(timeout=None)
+                fb_view.add_item(TicketControlSelect(thread_id=tid_int, guild_id=gid_int))
+                await interaction.response.edit_message(
+                    embed=discord.Embed(description=fallback_txt, color=accent_color),
+                    view=fb_view
+                )
+
+        emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+        await interaction.followup.send(
+            f"{emoji_correto} Você assumiu este ticket!",
+            ephemeral=True
+        )
+
+        # Log em Canal Logs de tickets assumidos se configurado
+        canal_assumidos_id = cfg.get("logs", {}).get("canal_assumidos_id")
+        if canal_assumidos_id and str(canal_assumidos_id).isdigit():
+            try:
+                log_ch = (
+                    (interaction.guild.get_channel(int(canal_assumidos_id)) if interaction.guild else None)
+                    or interaction.client.get_channel(int(canal_assumidos_id))
+                    or await interaction.client.fetch_channel(int(canal_assumidos_id))
+                )
+                if log_ch is not None:
+                    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+                    emoji_rocket = EmojiManager.get("rocket", fallback="<:rocket:1561482854133669908>")
+                    thread_ref = f"<#{tid_int}>"
+                    log_text = (
+                        f"## {emoji_bot} Ticket Assumido\n\n"
+                        f"> {emoji_rocket} **Atendente:** {interaction.user.mention} (`{interaction.user.id}`)\n"
+                        f"> **Dono do ticket:** {user_mention}\n"
+                        f"> **Categoria:** {cat_nome}\n"
+                        f"> **Tópico:** {thread_ref}"
+                    )
+                    if HAS_COMPONENTS_V2:
+                        log_view = discord.ui.LayoutView(timeout=None)
+                        log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
+                        await log_ch.send(view=log_view)
+                    else:
+                        await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
+            except Exception as e:
+                logger.warning(f"Aviso ao enviar log de ticket assumido para {canal_assumidos_id}: {e}")
+        return
+
+    # Demais opções (fechar, puxar_membro, renomear) só podem ser usadas após assumir o ticket
+    if not assumed_by_id:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "⚠️ Você precisa **Assumir** o ticket primeiro para poder usar as demais opções.",
+                ephemeral=True
+            )
+        asyncio.create_task(
+            _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+        )
+        return
+
+    if str(interaction.user.id) != str(assumed_by_id):
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                f"⚠️ Apenas <@{assumed_by_id}> (quem assumiu este ticket) pode usar as demais opções.",
+                ephemeral=True
+            )
+        asyncio.create_task(
+            _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+        )
+        return
+
+    if action == "puxar_membro":
+        puxar_v2 = build_v2_puxar_membro_layout(tid_int, gid_int, accent_color)
+        if not interaction.response.is_done():
+            if puxar_v2 is not None:
+                await interaction.response.send_message(view=puxar_v2, ephemeral=True)
+            else:
+                fb_view = discord.ui.View(timeout=180)
+                fb_view.add_item(PuxarMembroUserSelect(tid_int, gid_int, accent_color))
+                await interaction.response.send_message(
+                    "Selecione o(s) membro(s) para puxar para este tópico:",
+                    view=fb_view,
+                    ephemeral=True
+                )
+        asyncio.create_task(
+            _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+        )
+        return
+
+    if action == "renomear":
+        current_name = getattr(interaction.channel, "name", "") or ""
+        if not interaction.response.is_done():
+            await interaction.response.send_modal(
+                RenomearTicketModal(tid_int, gid_int, current_name=current_name, accent_color=accent_color)
+            )
+        asyncio.create_task(
+            _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
+        )
+        return
+
+    if action == "fechar":
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        thread = interaction.channel
+        if thread is None or getattr(thread, "id", 0) != tid_int:
+            try:
+                thread = await interaction.client.fetch_channel(tid_int)
+            except Exception:
+                thread = interaction.channel
+
+        owner_id = ticket_data.get("owner_id")
+        user_mention = f"<@{owner_id}>" if owner_id else "Membro"
+        cat_nome = ticket_data.get("category_name") or "Atendimento"
+        thread_name = getattr(thread, "name", None) or f"ticket-{tid_int}"
+
+        # Log em Canal Logs de tickets fechados se configurado
+        canal_fechados_id = cfg.get("logs", {}).get("canal_fechados_id")
+        if canal_fechados_id and str(canal_fechados_id).isdigit():
+            try:
+                log_ch = (
+                    (interaction.guild.get_channel(int(canal_fechados_id)) if interaction.guild else None)
+                    or interaction.client.get_channel(int(canal_fechados_id))
+                    or await interaction.client.fetch_channel(int(canal_fechados_id))
+                )
+                if log_ch is not None:
+                    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+                    emoji_lock = EmojiManager.get("lock", fallback="🔒")
+                    log_text = (
+                        f"## {emoji_bot} Ticket Fechado\n\n"
+                        f"> {emoji_lock} **Fechado por:** {interaction.user.mention} (`{interaction.user.id}`)\n"
+                        f"> **Dono do ticket:** {user_mention}\n"
+                        f"> **Atendente:** <@{assumed_by_id}>\n"
+                        f"> **Categoria:** {cat_nome}\n"
+                        f"> **Tópico:** `{thread_name}`"
+                    )
+                    if HAS_COMPONENTS_V2:
+                        log_view = discord.ui.LayoutView(timeout=None)
+                        log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
+                        await log_ch.send(view=log_view)
+                    else:
+                        await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
+            except Exception as e:
+                logger.warning(f"Aviso ao enviar log de ticket fechado para {canal_fechados_id}: {e}")
+
+        tickets_ativos.pop(tid_str, None)
+        await CloudStorage.save_guild_config(gid_str, cfg)
+
+        emoji_lock = EmojiManager.get("lock", fallback="🔒")
+        await interaction.followup.send(
+            f"{emoji_lock} Fechando este ticket...",
+            ephemeral=True
+        )
+        if thread is not None:
+            try:
+                await thread.send(f"{emoji_lock} Ticket encerrado por {interaction.user.mention}. O tópico será fechado em 3 segundos...")
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+            try:
+                await thread.delete(reason=f"Ticket fechado por {interaction.user}")
+            except discord.Forbidden:
+                try:
+                    await thread.edit(archived=True, locked=True, reason=f"Ticket fechado por {interaction.user}")
+                except Exception as e:
+                    logger.warning(f"Erro ao arquivar tópico {tid_int}: {e}")
+            except Exception as e:
+                logger.warning(f"Erro ao deletar tópico {tid_int}: {e}")
 
 
 async def _reply_ephemeral_status(interaction: discord.Interaction, message: str) -> None:
@@ -2456,10 +2993,13 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
         data_criacao=data_criacao,
         horario_criacao=horario_criacao,
         accent_color=accent_color,
+        thread_id=thread.id,
+        guild_id=gid_int,
     )
+    panel_msg = None
     try:
         if welcome_v2 is not None:
-            await thread.send(view=welcome_v2, allowed_mentions=allowed_mentions)
+            panel_msg = await thread.send(view=welcome_v2, allowed_mentions=allowed_mentions)
         else:
             fallback_txt = format_ticket_welcome_text(
                 user_mention=interaction.user.mention,
@@ -2468,12 +3008,30 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
                 data_criacao=data_criacao,
                 horario_criacao=horario_criacao,
             )
-            await thread.send(
+            fb_view = discord.ui.View(timeout=None)
+            fb_view.add_item(TicketControlSelect(thread_id=thread.id, guild_id=gid_int))
+            panel_msg = await thread.send(
                 embed=discord.Embed(description=fallback_txt, color=accent_color),
+                view=fb_view,
                 allowed_mentions=allowed_mentions
             )
     except Exception as e:
         logger.warning(f"Aviso ao enviar mensagem inicial no tópico {thread.id}: {e}")
+
+    # Salva estado do ticket ativo para persistir após reinícios
+    tickets_ativos = cfg.setdefault("tickets_ativos", {})
+    tickets_ativos[str(thread.id)] = {
+        "thread_id": str(thread.id),
+        "message_id": str(panel_msg.id) if panel_msg else None,
+        "owner_id": str(interaction.user.id),
+        "category_id": str(categoria_alvo.get("id") or ""),
+        "category_name": cat_nome,
+        "allowed_role_ids": cargos_ids,
+        "assumed_by_id": None,
+        "data_criacao": data_criacao,
+        "horario_criacao": horario_criacao,
+    }
+    await CloudStorage.save_guild_config(gid_str, cfg)
 
     # Adiciona membros dos cargos permitidos ao tópico privado sem sujar o chat
     if interaction.guild and cargos_ids:
@@ -3634,23 +4192,34 @@ class TicketPanelCog(commands.Cog, name="PainelConfig"):
 
     @commands.Cog.listener("on_interaction")
     async def on_public_ticket_interaction(self, interaction: discord.Interaction):
-        """Mantém o Select Menu do painel público de tickets funcional mesmo após reinícios do bot."""
+        """Mantém os Select Menus do painel público e do painel interno do ticket funcionais após reinícios."""
         if interaction.type != discord.InteractionType.component:
             return
         data = interaction.data or {}
-        if data.get("custom_id") != "select_ticket_abrir_categoria":
-            return
+        custom_id = data.get("custom_id")
         values = data.get("values") or []
         if not values:
             return
-        await asyncio.sleep(0.05)
-        if interaction.response.is_done():
-            return
-        await handle_public_category_selection(
-            interaction,
-            str(values[0]),
-            interaction.guild_id or 0
-        )
+
+        if custom_id == "select_ticket_abrir_categoria":
+            await asyncio.sleep(0.05)
+            if interaction.response.is_done():
+                return
+            await handle_public_category_selection(
+                interaction,
+                str(values[0]),
+                interaction.guild_id or 0
+            )
+        elif custom_id == "select_ticket_painel_acoes":
+            await asyncio.sleep(0.05)
+            if interaction.response.is_done():
+                return
+            await handle_ticket_panel_action(
+                interaction,
+                str(values[0]),
+                interaction.guild_id or 0,
+                interaction.channel_id or 0,
+            )
 
 
 async def setup(bot: commands.Bot):

@@ -136,6 +136,7 @@ class CloudStorage:
                 "cargo_membros_id": None,
                 "cargos_permitidos_ids": []
             },
+            "tickets_ativos": {},
             "horario_atendimento": {
                 "ativo": False,
                 "inicio": "08:00",
