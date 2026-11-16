@@ -6,6 +6,7 @@ modais com suporte nativo a componentes de upload de arquivo.
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import Dict, Any, List, Optional
 import discord
@@ -2279,15 +2280,76 @@ async def render_edit_category_panel(interaction: discord.Interaction, guild_id:
 _handled_public_interactions: List[int] = []
 
 
+def build_v2_ticket_created_layout(
+    thread_mention: str,
+    accent_color: int,
+    emoji_correto: str,
+    emoji_ban: str,
+):
+    """Constrói a mensagem efêmera em Components V2 confirmando a criação do ticket."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        text = (
+            f"{emoji_correto} Seu ticket foi criado com sucesso!\n"
+            f"{emoji_ban} {thread_mention}"
+        )
+        layout_view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            accent_colour=accent_color
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de ticket criado: {e}")
+        return None
+
+
+def build_v2_ticket_welcome_layout(
+    user_mention: str,
+    cat_nome: str,
+    roles_mention: str,
+    accent_color: int,
+):
+    """Constrói a mensagem inicial em Components V2 dentro do tópico privado do ticket."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+        emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+        lines = [
+            f"## {emoji_bot} Ticket — {cat_nome}",
+            "",
+            f"> {emoji_info} Olá {user_mention}, seu atendimento foi iniciado! Aguarde um membro da equipe.",
+        ]
+        if roles_mention:
+            lines.append(f"> Equipe responsável: {roles_mention}")
+        layout_view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay("\n".join(lines)),
+            accent_colour=accent_color
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de boas-vindas do ticket: {e}")
+        return None
+
+
 async def handle_public_category_selection(interaction: discord.Interaction, selected_id: str, guild_id: int = 0) -> None:
-    """Processa a seleção de categoria no painel público de tickets (funciona também após reinício)."""
+    """Processa a seleção de categoria no painel público, cria o tópico privado e responde efêmero."""
     if interaction.id in _handled_public_interactions:
         return
     _handled_public_interactions.append(interaction.id)
     if len(_handled_public_interactions) > 200:
         del _handled_public_interactions[:100]
 
-    gid_str = str(guild_id or interaction.guild_id or "direct")
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    gid_int = guild_id or (interaction.guild_id or 0)
+    gid_str = str(gid_int or "direct")
     cfg = CloudStorage.get_guild_config(gid_str)
     categorias = cfg.get("categorias_ticket", [])
 
@@ -2299,20 +2361,153 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
             break
 
     if categoria_alvo is None:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                "Esta categoria não está mais disponível no painel.",
-                ephemeral=True
-            )
-        return
-
-    cat_nome = categoria_alvo.get("nome") or "Atendimento"
-    logger.info(f"Categoria pública '{cat_nome}' selecionada por {interaction.user} na guilda {gid_str}")
-    if not interaction.response.is_done():
-        await interaction.response.send_message(
-            f"Categoria **{cat_nome}** selecionada.",
+        await interaction.followup.send(
+            "Esta categoria não está mais disponível no painel.",
             ephemeral=True
         )
+        return
+
+    cat_nome = (categoria_alvo.get("nome") or "Atendimento").strip()
+    canal_topicos_id = categoria_alvo.get("canal_topicos_id")
+    target_channel = None
+
+    if canal_topicos_id and str(canal_topicos_id).isdigit():
+        ch_id_int = int(canal_topicos_id)
+        target_channel = (
+            (interaction.guild.get_channel(ch_id_int) if interaction.guild else None)
+            or interaction.client.get_channel(ch_id_int)
+        )
+        if target_channel is None:
+            try:
+                target_channel = await interaction.client.fetch_channel(ch_id_int)
+            except Exception:
+                target_channel = None
+
+    if target_channel is None and isinstance(interaction.channel, discord.TextChannel):
+        target_channel = interaction.channel
+
+    if target_channel is None or not hasattr(target_channel, "create_thread"):
+        await interaction.followup.send(
+            "❌ Canal de tópicos não configurado ou inválido para esta categoria.",
+            ephemeral=True
+        )
+        return
+
+    safe_user = re.sub(r"[^a-zA-Z0-9_-]", "", interaction.user.name) or str(interaction.user.id)
+    thread_name = f"🎫・{cat_nome}-{safe_user}"[:100]
+
+    try:
+        thread = await target_channel.create_thread(
+            name=thread_name,
+            type=discord.ChannelType.private_thread,
+            invitable=False,
+            reason=f"Ticket aberto por {interaction.user} ({cat_nome})"
+        )
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"❌ Não tenho permissão para criar tópicos privados em {target_channel.mention}.",
+            ephemeral=True
+        )
+        return
+    except Exception as e:
+        logger.error(f"Erro ao criar tópico privado de ticket: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Não foi possível criar o tópico do ticket: {e}",
+            ephemeral=True
+        )
+        return
+
+    try:
+        await thread.add_user(interaction.user)
+    except Exception as e:
+        logger.warning(f"Aviso ao adicionar autor {interaction.user} no tópico {thread.id}: {e}")
+
+    painel_cfg = cfg.get("painel", {})
+    app = _get_configured_appearance(painel_cfg)
+    accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    cargos_ids = [str(rid) for rid in (categoria_alvo.get("cargos_permitidos_ids") or []) if str(rid).isdigit()]
+    roles_mention = " ".join(f"<@&{rid}>" for rid in cargos_ids)
+    allowed_mentions = discord.AllowedMentions(users=True, roles=True)
+
+    welcome_v2 = build_v2_ticket_welcome_layout(
+        user_mention=interaction.user.mention,
+        cat_nome=cat_nome,
+        roles_mention=roles_mention,
+        accent_color=accent_color,
+    )
+    try:
+        if welcome_v2 is not None:
+            await thread.send(view=welcome_v2, allowed_mentions=allowed_mentions)
+        else:
+            fallback_txt = f"Olá {interaction.user.mention}! Seu ticket na categoria **{cat_nome}** foi aberto."
+            if roles_mention:
+                fallback_txt += f"\nEquipe: {roles_mention}"
+            await thread.send(fallback_txt, allowed_mentions=allowed_mentions)
+    except Exception as e:
+        logger.warning(f"Aviso ao enviar mensagem inicial no tópico {thread.id}: {e}")
+
+    # Log em Canal Logs de tickets abertos se configurado
+    logs_cfg = cfg.get("logs", {})
+    canal_abertos_id = logs_cfg.get("canal_abertos_id")
+    if canal_abertos_id and str(canal_abertos_id).isdigit():
+        try:
+            log_ch = (
+                (interaction.guild.get_channel(int(canal_abertos_id)) if interaction.guild else None)
+                or interaction.client.get_channel(int(canal_abertos_id))
+                or await interaction.client.fetch_channel(int(canal_abertos_id))
+            )
+            if log_ch is not None:
+                emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+                emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+                log_text = (
+                    f"## {emoji_bot} Ticket Aberto\n\n"
+                    f"> {emoji_info} **Autor:** {interaction.user.mention} (`{interaction.user.id}`)\n"
+                    f"> **Categoria:** {cat_nome}\n"
+                    f"> **Tópico:** {thread.mention}"
+                )
+                if HAS_COMPONENTS_V2:
+                    log_view = discord.ui.LayoutView(timeout=None)
+                    log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
+                    await log_ch.send(view=log_view)
+                else:
+                    await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar log de ticket aberto para {canal_abertos_id}: {e}")
+
+    # Resolve/clona emojis de confirmação se necessário para exibição garantida
+    emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+    emoji_ban = EmojiManager.get("ban", fallback="<:ban:1561906116030505050>")
+    if EmojiManager.needs_remote_resolve(emoji_correto, guild=interaction.guild):
+        emoji_correto = await EmojiManager.resolve_or_clone_emoji(
+            emoji_correto, guild=interaction.guild, bot=interaction.client
+        )
+    if EmojiManager.needs_remote_resolve(emoji_ban, guild=interaction.guild):
+        emoji_ban = await EmojiManager.resolve_or_clone_emoji(
+            emoji_ban, guild=interaction.guild, bot=interaction.client
+        )
+
+    logger.info(
+        f"Ticket aberto por {interaction.user} na categoria '{cat_nome}' -> tópico {thread.name} ({thread.id}) na guilda {gid_str}"
+    )
+
+    confirm_v2 = build_v2_ticket_created_layout(
+        thread_mention=thread.mention,
+        accent_color=accent_color,
+        emoji_correto=emoji_correto,
+        emoji_ban=emoji_ban,
+    )
+    if confirm_v2 is not None:
+        try:
+            await interaction.followup.send(view=confirm_v2, ephemeral=True)
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar confirmação V2 de ticket criado: {e}. Usando fallback.")
+
+    await interaction.followup.send(
+        content=f"{emoji_correto} Seu ticket foi criado com sucesso!\n{emoji_ban} {thread.mention}",
+        ephemeral=True
+    )
 
 
 class PublicTicketCategorySelect(discord.ui.Select):
