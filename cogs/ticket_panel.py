@@ -2971,7 +2971,7 @@ def build_v2_configuracoes_layout(guild_id: int, user_id: int):
         )
 
         container_items: List[Any] = []
-        if hasattr(discord.ui, "MediaGallery") and hasattr(discord.ui, "MediaGalleryItem"):
+        if hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem"):
             container_items.append(
                 discord.ui.MediaGallery(discord.MediaGalleryItem(media=MAIN_PANEL_BANNER_URL))
             )
