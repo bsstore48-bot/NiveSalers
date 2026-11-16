@@ -158,6 +158,18 @@ def format_settings_panel_text() -> str:
     return "\n".join(lines)
 
 
+def format_categories_panel_text() -> str:
+    """Retorna o texto do painel de categorias."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+
+    lines = [
+        f"## {emoji_bot} Categorias\n",
+        f"> {emoji_info} Use os botões abaixo para criar, editar e remover categorias do sistema de atendimento do seu servidor."
+    ]
+    return "\n".join(lines)
+
+
 # =====================================================================
 # MODALS INTERATIVOS COM COMPONENTE NATIVO DE UPLOAD (LABEL TIPO 18 + FILE UPLOAD TIPO 19)
 # =====================================================================
@@ -489,7 +501,7 @@ class CorButton(discord.ui.Button):
 
 
 class CategoriasButton(discord.ui.Button):
-    """Botão Categorias do painel de configurações do sistema (sem ação por enquanto)."""
+    """Botão Categorias do painel de configurações do sistema."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Categorias",
@@ -502,8 +514,90 @@ class CategoriasButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Botão Categorias clicado por {interaction.user} (sem ação por enquanto)")
+        logger.info(f"Botão Categorias clicado por {interaction.user} (abrindo painel de categorias)")
+        await render_categories_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+class CriarCategoriaButton(discord.ui.Button):
+    """Botão verde Criar categoria (sem ação por enquanto)."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Criar categoria",
+            emoji=resolve_partial_emoji("plus", "➕"),
+            style=discord.ButtonStyle.success,  # Verde
+            custom_id="btn_categorias_criar",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Criar categoria clicado por {interaction.user} (sem ação por enquanto)")
         await interaction.response.defer()
+
+
+class RemoverCategoriaButton(discord.ui.Button):
+    """Botão vermelho Remover categoria (sem ação por enquanto)."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Remover categoria",
+            emoji=resolve_partial_emoji("delete", "🗑️"),
+            style=discord.ButtonStyle.danger,  # Vermelho
+            custom_id="btn_categorias_remover",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Remover categoria clicado por {interaction.user} (sem ação por enquanto)")
+        await interaction.response.defer()
+
+
+class EditarCategoriaButton(discord.ui.Button):
+    """Botão cinza Editar categoria (sem ação por enquanto)."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Editar categoria",
+            emoji=resolve_partial_emoji("edit", "✏️"),
+            style=discord.ButtonStyle.secondary,  # Cinza
+            custom_id="btn_categorias_editar",
+            row=0
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Editar categoria clicado por {interaction.user} (sem ação por enquanto)")
+        await interaction.response.defer()
+
+
+class VoltarParaSistemaButton(discord.ui.Button):
+    """Botão Voltar do painel de categorias: sempre azul na última linha separada."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Voltar",
+            emoji=resolve_partial_emoji("back", "⬅️"),
+            style=discord.ButtonStyle.primary,  # Sempre Azul (Primary)
+            custom_id="btn_categorias_voltar",
+            row=1  # Última fila separada
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Voltar clicado por {interaction.user} no painel de categorias")
+        await render_settings_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
 
 
 class VoltarParaPrincipalButton(discord.ui.Button):
@@ -817,6 +911,49 @@ def build_v2_settings_layout(guild_id: int, user_id: int):
         return None
 
 
+def build_v2_categories_layout(guild_id: int, user_id: int):
+    """
+    Constrói a árvore de LayoutView com Container para o painel de Categorias.
+    Contém Criar (verde), Remover (vermelho), Editar (cinza) e Voltar (azul na última linha).
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+        text = format_categories_panel_text()
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        row1 = discord.ui.ActionRow(
+            CriarCategoriaButton(guild_id, user_id),
+            RemoverCategoriaButton(guild_id, user_id),
+            EditarCategoriaButton(guild_id, user_id)
+        )
+        row_voltar = discord.ui.ActionRow(
+            VoltarParaSistemaButton(guild_id, user_id)
+        )
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            row1,
+            row_voltar,
+            accent_colour=cor_embed
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de categorias: {e}")
+        return None
+
+
 # =====================================================================
 # RENDERIZADORES COMPATÍVEIS (V2 PRIMARY COM FALLBACK AUTOMÁTICO)
 # =====================================================================
@@ -941,6 +1078,40 @@ async def render_settings_panel(interaction: discord.Interaction, guild_id: int,
     view = discord.ui.View(timeout=None)
     view.add_item(CategoriasButton(guild_id, user_id))
     view.add_item(VoltarParaPrincipalButton(guild_id, user_id, row=1, custom_id="btn_sistema_voltar"))
+
+    if is_edit:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def render_categories_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+    """Renderiza o painel de Categorias com Componentes V2 (Container + Criar/Remover/Editar + Voltar)."""
+    v2_view = build_v2_categories_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel de categorias enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de categorias: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    text = format_categories_panel_text()
+    embed = discord.Embed(description=text, color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    view.add_item(CriarCategoriaButton(guild_id, user_id))
+    view.add_item(RemoverCategoriaButton(guild_id, user_id))
+    view.add_item(EditarCategoriaButton(guild_id, user_id))
+    view.add_item(VoltarParaSistemaButton(guild_id, user_id))
 
     if is_edit:
         if not interaction.response.is_done():
