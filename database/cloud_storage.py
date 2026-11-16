@@ -121,6 +121,10 @@ class CloudStorage:
                 "canal_assumidos_id": None,
                 "transcripts_ativo": True
             },
+            "cargos": {
+                "cargo_membros_id": None,
+                "cargos_permitidos_ids": []
+            },
             "horario_atendimento": {
                 "ativo": False,
                 "inicio": "08:00",

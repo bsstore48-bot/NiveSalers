@@ -601,6 +601,25 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
             await interaction.response.send_message(f"Ocorreu um erro no upload da thumbnail: {error}", ephemeral=True)
 
 
+def _get_allowed_category_role_ids(guild_id: str, guild: Optional[discord.Guild] = None) -> List[str]:
+    """Retorna os IDs de Cargos Permitidos configurados em /configurações -> Cargos (sem Cargo Membros)."""
+    cfg = CloudStorage.get_guild_config(guild_id)
+    cargos_cfg = cfg.get("cargos", {})
+    cargo_membros_id = str(cargos_cfg.get("cargo_membros_id") or "").strip()
+    raw_ids = cargos_cfg.get("cargos_permitidos_ids") or []
+    result: List[str] = []
+    seen = set()
+    for rid in raw_ids:
+        rid_str = str(rid).strip()
+        if not rid_str.isdigit() or rid_str == cargo_membros_id or rid_str in seen:
+            continue
+        if guild is not None and guild.get_role(int(rid_str)) is None:
+            continue
+        seen.add(rid_str)
+        result.append(rid_str)
+    return result
+
+
 class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
     """Modal com 5 abas (Label Type 18) para criar ou editar uma categoria de atendimento."""
     def __init__(
@@ -609,7 +628,8 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         user_id: int,
         edit_cat_id: Optional[str] = None,
         categoria_atual: Optional[Dict[str, Any]] = None,
-        include_select_defaults: bool = True
+        include_select_defaults: bool = True,
+        guild: Optional[discord.Guild] = None
     ):
         modal_title = "Editar Categoria" if categoria_atual is not None else "Criar Categoria"
         super().__init__(title=modal_title)
@@ -618,6 +638,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         self.edit_cat_id = edit_cat_id
         self.categoria_atual = categoria_atual
         self.include_select_defaults = include_select_defaults
+        self.guild = guild
 
     def to_components(self) -> List[Dict[str, Any]]:
         cat = self.categoria_atual or {}
@@ -675,18 +696,30 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         if self.include_select_defaults and canal_atual and str(canal_atual).isdigit():
             comp_canal["default_values"] = [{"id": str(canal_atual), "type": "channel"}]
 
+        gid_str = str(self.guild_id or (self.guild.id if self.guild else 0) or "direct")
+        allowed_role_ids = _get_allowed_category_role_ids(gid_str, guild=self.guild)
+        cargos_atuais_set = {str(rid) for rid in cargos_atuais if str(rid).isdigit()}
+        role_options: List[Dict[str, Any]] = []
+        for rid in allowed_role_ids[:25]:
+            role_obj = self.guild.get_role(int(rid)) if (self.guild and rid.isdigit()) else None
+            role_name = role_obj.name[:100] if role_obj else f"Cargo {rid}"
+            opt: Dict[str, Any] = {
+                "label": role_name,
+                "value": rid
+            }
+            if self.include_select_defaults and rid in cargos_atuais_set:
+                opt["default"] = True
+            role_options.append(opt)
+
         comp_cargos: Dict[str, Any] = {
-            "type": 6,
+            "type": 3,
             "custom_id": "cat_cargos_permitidos",
             "placeholder": "Selecione os cargos permitidos...",
             "min_values": 1,
-            "max_values": 10,
-            "required": True
+            "max_values": max(1, min(25, len(role_options))),
+            "required": True,
+            "options": role_options
         }
-        if self.include_select_defaults:
-            default_roles = [{"id": str(rid), "type": "role"} for rid in cargos_atuais if str(rid).isdigit()][:10]
-            if default_roles:
-                comp_cargos["default_values"] = default_roles
 
         return [
             {
@@ -1088,9 +1121,18 @@ class CriarCategoriaButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        allowed_roles = _get_allowed_category_role_ids(str(gid_int or "direct"), guild=interaction.guild)
+        if not allowed_roles:
+            await interaction.response.send_message(
+                "⚠️ Nenhum **Cargo Permitido** foi configurado ainda! "
+                "Vá em `/configurações` → **Cargos** e selecione os **Cargos Permitidos** primeiro.",
+                ephemeral=True
+            )
+            return
         logger.info(f"Botão Criar categoria clicado por {interaction.user} (abrindo modal)")
         await interaction.response.send_modal(
-            CriarCategoriaModal(self.guild_id or (interaction.guild_id or 0), interaction.user.id)
+            CriarCategoriaModal(gid_int, interaction.user.id, guild=interaction.guild)
         )
 
 
@@ -1370,6 +1412,14 @@ class EditarCategoriaSelect(discord.ui.Select):
         gid_int = self.guild_id or (interaction.guild_id or 0)
         uid_int = self.user_id or interaction.user.id
 
+        allowed_roles = _get_allowed_category_role_ids(str(gid_int or "direct"), guild=interaction.guild)
+        if not allowed_roles:
+            await interaction.response.send_message(
+                "⚠️ Nenhum **Cargo Permitido** foi configurado ainda! "
+                "Vá em `/configurações` → **Cargos** e selecione os **Cargos Permitidos** primeiro.",
+                ephemeral=True
+            )
+            return
         try:
             await interaction.response.send_modal(
                 CriarCategoriaModal(
@@ -1377,7 +1427,8 @@ class EditarCategoriaSelect(discord.ui.Select):
                     uid_int,
                     edit_cat_id=selected_id,
                     categoria_atual=categoria_alvo,
-                    include_select_defaults=True
+                    include_select_defaults=True,
+                    guild=interaction.guild
                 )
             )
         except discord.HTTPException as e:
@@ -1389,7 +1440,8 @@ class EditarCategoriaSelect(discord.ui.Select):
                         uid_int,
                         edit_cat_id=selected_id,
                         categoria_atual=categoria_alvo,
-                        include_select_defaults=False
+                        include_select_defaults=False,
+                        guild=interaction.guild
                     )
                 )
 
@@ -2773,21 +2825,159 @@ class LogsCanalSelect(discord.ui.ChannelSelect):
         )
 
 
+def format_cargos_config_panel_text(guild_id: str) -> str:
+    """Retorna o texto do painel de configuração de cargos (/configurações -> Cargos)."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+    emoji_pin = EmojiManager.get("pin", fallback="<:pin:1561908764532146246>")
+
+    cfg = CloudStorage.get_guild_config(guild_id)
+    cargos_cfg = cfg.get("cargos", {})
+    cargo_membros_id = cargos_cfg.get("cargo_membros_id")
+    cargos_permitidos_ids = cargos_cfg.get("cargos_permitidos_ids") or []
+
+    membros_fmt = f"<@&{cargo_membros_id}>" if cargo_membros_id else "Não definido"
+    permitidos_fmt = (
+        ", ".join(f"<@&{rid}>" for rid in cargos_permitidos_ids)
+        if cargos_permitidos_ids
+        else "Não definido"
+    )
+
+    return (
+        f"## {emoji_bot} Cargos\n\n"
+        f"> {emoji_info} Selecione os cargos usando os selects menus abaixo.\n"
+        f"> {emoji_member} Cargo Membros: {membros_fmt}\n"
+        f"> {emoji_pin} Cargos Permitidos: {permitidos_fmt}"
+    )
+
+
+def _build_role_default_values(role_ids: List[str]) -> List[Any]:
+    """Constrói default_values para RoleSelect de forma compatível com diferentes versões do discord.py."""
+    defaults: List[Any] = []
+    default_val_cls = getattr(discord, "SelectDefaultValue", None)
+    default_type_enum = getattr(discord, "SelectDefaultValueType", None)
+    for rid in role_ids:
+        if not rid or not str(rid).isdigit():
+            continue
+        try:
+            if default_val_cls and default_type_enum:
+                defaults.append(default_val_cls(id=int(rid), type=default_type_enum.role))
+            else:
+                defaults.append(discord.Object(id=int(rid)))
+        except Exception:
+            pass
+    return defaults
+
+
+class CargoMembrosSelect(discord.ui.RoleSelect):
+    """Role Select Menu para escolher 1 Cargo Membros."""
+    def __init__(self, guild_id: int, user_id: int, current_role_id: Optional[str] = None):
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        default_values = _build_role_default_values([current_role_id] if current_role_id else [])
+        select_kwargs: Dict[str, Any] = {
+            "placeholder": "Selecione o Cargo Membros (apenas 1)...",
+            "min_values": 0,
+            "max_values": 1,
+            "custom_id": "select_config_cargo_membros",
+        }
+        if default_values:
+            select_kwargs["default_values"] = default_values
+
+        try:
+            super().__init__(**select_kwargs)
+        except TypeError:
+            select_kwargs.pop("default_values", None)
+            super().__init__(**select_kwargs)
+
+    async def callback(self, interaction: discord.Interaction):
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cargos_cfg = cfg.setdefault("cargos", {})
+
+        if self.values:
+            selected_role = self.values[0]
+            role_id = str(getattr(selected_role, "id", selected_role))
+            cargos_cfg["cargo_membros_id"] = role_id
+            logger.info(f"Cargo Membros definido para {role_id} por {interaction.user} na guilda {gid_str}")
+        else:
+            cargos_cfg["cargo_membros_id"] = None
+            logger.info(f"Cargo Membros removido por {interaction.user} na guilda {gid_str}")
+
+        await CloudStorage.save_guild_config(gid_str, cfg)
+        await render_cargos_config_panel(
+            interaction,
+            gid_int,
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+class CargosPermitidosSelect(discord.ui.RoleSelect):
+    """Role Select Menu para escolher múltiplos Cargos Permitidos."""
+    def __init__(self, guild_id: int, user_id: int, current_role_ids: Optional[List[str]] = None):
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        default_values = _build_role_default_values((current_role_ids or [])[:25])
+        select_kwargs: Dict[str, Any] = {
+            "placeholder": "Selecione os Cargos Permitidos (vários)...",
+            "min_values": 0,
+            "max_values": 25,
+            "custom_id": "select_config_cargos_permitidos",
+        }
+        if default_values:
+            select_kwargs["default_values"] = default_values
+
+        try:
+            super().__init__(**select_kwargs)
+        except TypeError:
+            select_kwargs.pop("default_values", None)
+            super().__init__(**select_kwargs)
+
+    async def callback(self, interaction: discord.Interaction):
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cargos_cfg = cfg.setdefault("cargos", {})
+
+        role_ids = [str(getattr(r, "id", r)) for r in (self.values or [])]
+        cargos_cfg["cargos_permitidos_ids"] = role_ids
+        logger.info(f"Cargos Permitidos atualizados ({len(role_ids)}) por {interaction.user} na guilda {gid_str}")
+
+        await CloudStorage.save_guild_config(gid_str, cfg)
+        await render_cargos_config_panel(
+            interaction,
+            gid_int,
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
 class VoltarParaConfiguracoesButton(discord.ui.Button):
-    """Botão Voltar do painel de Canais para o painel /configurações."""
-    def __init__(self, guild_id: int, user_id: int):
+    """Botão Voltar dos subpainéis do /configurações para o painel principal do /configurações."""
+    def __init__(
+        self,
+        guild_id: int,
+        user_id: int,
+        custom_id: str = "btn_canais_voltar",
+        row: int = 3
+    ):
         super().__init__(
             label="Voltar",
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,
-            custom_id="btn_canais_voltar",
-            row=3
+            custom_id=custom_id,
+            row=row
         )
         self.guild_id = guild_id
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Botão Voltar clicado por {interaction.user} no painel de Canais")
+        logger.info(f"Botão Voltar clicado por {interaction.user} para /configurações")
         await render_configuracoes_panel(
             interaction,
             self.guild_id or (interaction.guild_id or 0),
@@ -2820,7 +3010,7 @@ class CanaisConfigButton(discord.ui.Button):
 
 
 class CargosConfigButton(discord.ui.Button):
-    """Botão Cargos do painel /configurações (ainda sem ação)."""
+    """Botão Cargos do painel /configurações."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Cargos",
@@ -2833,8 +3023,111 @@ class CargosConfigButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
+        logger.info(f"Botão Cargos clicado por {interaction.user} no /configurações")
+        await render_cargos_config_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+def build_v2_cargos_config_layout(guild_id: int, user_id: int):
+    """Constrói o painel V2 de Cargos (/configurações -> Cargos) com 2 RoleSelects e botão Voltar."""
+    if not HAS_COMPONENTS_V2:
+        return None
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cargos_cfg = cfg.get("cargos", {})
+        text = format_cargos_config_panel_text(gid_str)
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = (
+            discord.ui.Separator(visible=True)
+            if spacing_arg is None
+            else discord.ui.Separator(visible=True, spacing=spacing_arg)
+        )
+
+        row_membros = discord.ui.ActionRow(
+            CargoMembrosSelect(
+                guild_id,
+                user_id,
+                current_role_id=cargos_cfg.get("cargo_membros_id"),
+            )
+        )
+        row_permitidos = discord.ui.ActionRow(
+            CargosPermitidosSelect(
+                guild_id,
+                user_id,
+                current_role_ids=cargos_cfg.get("cargos_permitidos_ids") or [],
+            )
+        )
+        row_voltar = discord.ui.ActionRow(
+            VoltarParaConfiguracoesButton(guild_id, user_id, custom_id="btn_cargos_voltar", row=2)
+        )
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            separator,
+            row_membros,
+            row_permitidos,
+            row_voltar,
+            accent_colour=config.EMBED_COLOR_DEFAULT
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de Cargos (/configurações): {e}")
+        return None
+
+
+async def render_cargos_config_panel(
+    interaction: discord.Interaction,
+    guild_id: int,
+    user_id: int,
+    is_edit: bool = True
+):
+    """Renderiza o painel efêmero de Cargos dentro do fluxo /configurações."""
+    gid_str = str(guild_id or "direct")
+    v2_view = build_v2_cargos_config_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
+            else:
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel Cargos (/configurações) enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de Cargos: {e}. Usando fallback.")
+
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cargos_cfg = cfg.get("cargos", {})
+    embed = discord.Embed(
+        description=format_cargos_config_panel_text(gid_str),
+        color=config.EMBED_COLOR_DEFAULT
+    )
+    view = discord.ui.View(timeout=None)
+    view.add_item(CargoMembrosSelect(guild_id, user_id, current_role_id=cargos_cfg.get("cargo_membros_id")))
+    view.add_item(CargosPermitidosSelect(guild_id, user_id, current_role_ids=cargos_cfg.get("cargos_permitidos_ids") or []))
+    view.add_item(VoltarParaConfiguracoesButton(guild_id, user_id, custom_id="btn_cargos_voltar", row=2))
+    if is_edit:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 def build_v2_canais_config_layout(guild_id: int, user_id: int):

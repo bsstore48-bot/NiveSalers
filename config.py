@@ -111,5 +111,17 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "cargo",
         "tag": "<:cargo:1555767392552886414>",
         "fallback": "🛡️"
+    },
+    "member": {
+        "id": "1561907903688876064",
+        "name": "member",
+        "tag": "<:member:1561907903688876064>",
+        "fallback": "👤"
+    },
+    "pin": {
+        "id": "1561908764532146246",
+        "name": "pin",
+        "tag": "<:pin:1561908764532146246>",
+        "fallback": "📌"
     }
 }
