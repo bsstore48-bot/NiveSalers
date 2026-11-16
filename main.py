@@ -60,6 +60,15 @@ async def on_ready():
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    orig = getattr(error, "original", error)
+    if isinstance(orig, discord.NotFound) and getattr(orig, "code", None) == 10062:
+        elapsed = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+        if elapsed < 2.5:
+            logger.critical(
+                f"[DUPLICATE INSTANCE] Comando '{interaction.command}' sofreu 10062 Unknown interaction em {elapsed:.3f}s — "
+                "outra instância conectada ao Discord com o mesmo DISCORD_TOKEN respondeu primeiro!"
+            )
+            return
     logger.error(f"Erro na execução do comando {interaction.command}: {error}", exc_info=True)
     try:
         msg = f"Ocorreu um erro ao processar: {error}"

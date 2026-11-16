@@ -328,12 +328,14 @@ class TituloModal(discord.ui.Modal, title="Configurar Título"):
 
     async def on_submit(self, interaction: discord.Interaction):
         novo_titulo = self.titulo_input.value.strip()
-        cfg = CloudStorage.get_guild_config(str(self.guild_id))
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
         cfg["painel"]["titulo"] = novo_titulo
-        await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+        await CloudStorage.save_guild_config(gid_str, cfg)
 
-        logger.info(f"Título atualizado por {interaction.user} no servidor {self.guild_id}: '{novo_titulo}'")
-        await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+        logger.info(f"Título atualizado por {interaction.user} no servidor {gid_str}: '{novo_titulo}'")
+        await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         logger.error(f"Erro no modal de título: {error}", exc_info=True)
@@ -364,12 +366,14 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
 
     async def on_submit(self, interaction: discord.Interaction):
         nova_descricao = self.descricao_input.value.strip()
-        cfg = CloudStorage.get_guild_config(str(self.guild_id))
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
         cfg["painel"]["descricao"] = nova_descricao
-        await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+        await CloudStorage.save_guild_config(gid_str, cfg)
 
-        logger.info(f"Descrição atualizada por {interaction.user} no servidor {self.guild_id}")
-        await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+        logger.info(f"Descrição atualizada por {interaction.user} no servidor {gid_str}")
+        await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         logger.error(f"Erro no modal de descrição: {error}", exc_info=True)
@@ -446,13 +450,15 @@ class BannerModal(discord.ui.Modal, title="Configurar Banner"):
             att = self.file_upload.values[0]
             novo_banner = getattr(att, "url", None) or getattr(att, "proxy_url", None) or str(att)
 
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
         if novo_banner:
-            cfg = CloudStorage.get_guild_config(str(self.guild_id))
+            cfg = CloudStorage.get_guild_config(gid_str)
             cfg["painel"]["banner_url"] = novo_banner
-            await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+            await CloudStorage.save_guild_config(gid_str, cfg)
             logger.info(f"Banner atualizado via componente de upload por {interaction.user}: {novo_banner}")
 
-        await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+        await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         logger.error(f"Erro no modal de upload do banner: {error}", exc_info=True)
@@ -529,13 +535,15 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
             att = self.file_upload.values[0]
             nova_thumb = getattr(att, "url", None) or getattr(att, "proxy_url", None) or str(att)
 
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        gid_str = str(gid_int or "direct")
         if nova_thumb:
-            cfg = CloudStorage.get_guild_config(str(self.guild_id))
+            cfg = CloudStorage.get_guild_config(gid_str)
             cfg["painel"]["thumbnail_url"] = nova_thumb
-            await CloudStorage.save_guild_config(str(self.guild_id), cfg)
+            await CloudStorage.save_guild_config(gid_str, cfg)
             logger.info(f"Thumbnail atualizada via componente de upload por {interaction.user}: {nova_thumb}")
 
-        await render_appearance_panel(interaction, self.guild_id, self.user_id, is_edit=True)
+        await render_appearance_panel(interaction, gid_int, self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         logger.error(f"Erro no modal de upload da thumbnail: {error}", exc_info=True)
@@ -1835,6 +1843,12 @@ async def render_main_panel(interaction: discord.Interaction, guild_id: int, use
                 await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel principal enviado com Componentes V2 (Container)")
             return
+        except discord.NotFound as e:
+            elapsed = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+            if getattr(e, "code", None) == 10062 and elapsed < 2.5:
+                logger.critical(f"[DUPLICATE INSTANCE] 10062 Unknown interaction em {elapsed:.3f}s! Outra instância com o mesmo DISCORD_TOKEN respondeu antes.")
+                return
+            logger.warning(f"Aviso ao enviar LayoutView v2: {e}. Usando fallback.")
         except Exception as e:
             logger.warning(f"Aviso ao enviar LayoutView v2: {e}. Usando fallback.")
 

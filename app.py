@@ -1,4 +1,6 @@
 import os
+import atexit
+import signal
 import threading
 import asyncio
 import gradio as gr
@@ -9,6 +11,9 @@ import config
 from utils.logger import logger
 from database.cloud_storage import CloudStorage
 from main import bot, load_extensions
+
+_bot_lock = threading.Lock()
+_bot_thread_started = False
 
 
 async def start_discord_bot():
@@ -31,10 +36,31 @@ async def start_discord_bot():
 def run_bot_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_discord_bot())
+    try:
+        loop.run_until_complete(start_discord_bot())
+    finally:
+        CloudStorage.flush_sync()
 
 
-threading.Thread(target=run_bot_thread, daemon=True).start()
+def _ensure_bot_started():
+    global _bot_thread_started
+    with _bot_lock:
+        if not _bot_thread_started:
+            _bot_thread_started = True
+            threading.Thread(target=run_bot_thread, daemon=True, name='discord-bot-thread').start()
+
+
+def _on_shutdown(*_args):
+    CloudStorage.flush_sync()
+
+
+atexit.register(_on_shutdown)
+try:
+    signal.signal(signal.SIGTERM, _on_shutdown)
+except Exception:
+    pass
+
+_ensure_bot_started()
 
 
 def get_status():

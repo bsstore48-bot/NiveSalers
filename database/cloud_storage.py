@@ -6,8 +6,10 @@ Garante que reinícios, atualizações e rebuilds não percam as configurações
 import os
 import json
 import time
+import copy
 import base64
 import asyncio
+import urllib.request
 from typing import Dict, Any, Optional
 import aiohttp
 
@@ -26,16 +28,39 @@ class CloudStorage:
     _is_initialized: bool = False
     _hf_dirty: bool = False
     _hf_worker_running: bool = False
+    _hf_sync_task: Optional[asyncio.Task] = None
+
+    @classmethod
+    def _merge_defaults(cls, guild_id: str, loaded: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Garante que qualquer config restaurada tenha todas as chaves padrão sem perder valores salvos."""
+        base = cls._default_guild_config(guild_id)
+        if not isinstance(loaded, dict):
+            return base
+        for key, val in loaded.items():
+            if isinstance(val, dict) and isinstance(base.get(key), dict):
+                merged_sub = copy.deepcopy(base[key])
+                for sk, sv in val.items():
+                    if isinstance(sv, dict) and isinstance(merged_sub.get(sk), dict):
+                        merged_deep = copy.deepcopy(merged_sub[sk])
+                        merged_deep.update(sv)
+                        merged_sub[sk] = merged_deep
+                    else:
+                        merged_sub[sk] = sv
+                base[key] = merged_sub
+            else:
+                base[key] = val
+        base["guild_id"] = str(guild_id)
+        return base
 
     @classmethod
     async def initialize(cls) -> None:
-        """Inicializa conexões e restaura dados da nuvem."""
+        """Inicializa conexões e restaura dados da nuvem (nuvem tem prioridade sobre disco local)."""
         if cls._is_initialized:
             return
 
         os.makedirs(DATA_DIR, exist_ok=True)
 
-        # 1. Tenta carregar do backup local em disco
+        # 1. Carrega fallback local em disco (pode ser sobrescrito pela nuvem logo abaixo)
         cls._load_from_local_disk()
 
         # 2. Se configurado MongoDB Atlas, inicializa driver motor
@@ -49,7 +74,7 @@ class CloudStorage:
             except Exception as e:
                 logger.error(f"Erro ao conectar com MongoDB Atlas: {e}")
 
-        # 3. Se configurado Hugging Face Dataset privado, restaura dados da nuvem
+        # 3. Se configurado Hugging Face Dataset privado, restaura dados da nuvem (prioritário)
         elif config.HF_DB_TOKEN and config.HF_DB_REPO:
             try:
                 await cls._sync_from_hf_dataset()
@@ -116,7 +141,7 @@ class CloudStorage:
     async def save_guild_config(cls, guild_id: str, data: Dict[str, Any]) -> None:
         """Salva a configuração do servidor com sincronização automática na nuvem."""
         gid = str(guild_id)
-        cls._guilds_data[gid] = data
+        cls._guilds_data[gid] = cls._merge_defaults(gid, data)
 
         # 1. Salva em disco local com escrita atômica
         cls._save_to_local_disk()
@@ -127,7 +152,7 @@ class CloudStorage:
                 collection = cls._mongo_db["guild_configs"]
                 await collection.update_one(
                     {"guild_id": gid},
-                    {"$set": data},
+                    {"$set": cls._guilds_data[gid]},
                     upsert=True
                 )
             except Exception as e:
@@ -147,8 +172,9 @@ class CloudStorage:
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
             temp_file = BACKUP_FILE + ".tmp"
+            snapshot = copy.deepcopy(cls._guilds_data)
             with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(cls._guilds_data, f, indent=4, ensure_ascii=False)
+                json.dump(snapshot, f, indent=4, ensure_ascii=False)
             os.replace(temp_file, BACKUP_FILE)
         except Exception as e:
             logger.error(f"Erro ao salvar backup em disco local: {e}")
@@ -161,14 +187,15 @@ class CloudStorage:
                 with open(BACKUP_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, dict):
-                        cls._guilds_data.update(data)
+                        for gid, cfg in data.items():
+                            cls._guilds_data[str(gid)] = cls._merge_defaults(str(gid), cfg)
                         logger.info(f"Carregadas configurações de {len(data)} servidores do disco local.")
             except Exception as e:
                 logger.error(f"Erro ao ler backup local: {e}")
 
     @classmethod
     async def _sync_from_mongo(cls) -> None:
-        """Restaura todos os documentos do MongoDB Atlas."""
+        """Restaura todos os documentos do MongoDB Atlas (sobrescreve cache local)."""
         if cls._mongo_db is None:
             return
         try:
@@ -179,7 +206,7 @@ class CloudStorage:
                 gid = str(doc.get("guild_id"))
                 if gid:
                     doc.pop("_id", None)
-                    cls._guilds_data[gid] = doc
+                    cls._guilds_data[gid] = cls._merge_defaults(gid, doc)
                     count += 1
             logger.info(f"Recuperadas configurações de {count} servidores do MongoDB Atlas.")
             cls._save_to_local_disk()
@@ -188,14 +215,15 @@ class CloudStorage:
 
     @classmethod
     async def _sync_from_hf_dataset(cls) -> None:
-        """Restaura backup da nuvem a partir do Dataset privado no Hugging Face Hub."""
+        """Restaura backup da nuvem a partir do Dataset privado no Hugging Face Hub (sobrescreve cache local)."""
         if not config.HF_DB_TOKEN or not config.HF_DB_REPO:
             return
 
-        url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/raw/main/cloud_backup.json?t={int(time.time())}"
+        url = f"https://huggingface.co/datasets/{config.HF_DB_REPO}/resolve/main/cloud_backup.json?t={int(time.time() * 1000)}"
         headers = {
             "Authorization": f"Bearer {config.HF_DB_TOKEN}",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
             "User-Agent": "NiveSalers-Bot"
         }
 
@@ -208,8 +236,8 @@ class CloudStorage:
                         remote_data = json.loads(raw_text)
                         if isinstance(remote_data, dict):
                             for gid, cfg in remote_data.items():
-                                if gid not in cls._guilds_data:
-                                    cls._guilds_data[gid] = cfg
+                                gid_str = str(gid)
+                                cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
                             logger.info(f"Backup restaurado do Hugging Face Dataset ({config.HF_DB_REPO}): {len(remote_data)} servidor(es).")
                             cls._save_to_local_disk()
                     elif resp.status == 404:
@@ -221,12 +249,33 @@ class CloudStorage:
             logger.warning(f"Aviso ao restaurar backup do Hugging Face Dataset: {e}")
 
     @classmethod
+    def _build_hf_commit_payload(cls) -> bytes:
+        snapshot = copy.deepcopy(cls._guilds_data)
+        serialized = json.dumps(snapshot, indent=2, ensure_ascii=False)
+        b64_content = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
+        ndjson_payload = "\n".join([
+            json.dumps({
+                "key": "header",
+                "value": {"summary": "chore(db): auto-sync ticket configurations"}
+            }),
+            json.dumps({
+                "key": "file",
+                "value": {
+                    "content": b64_content,
+                    "path": "cloud_backup.json",
+                    "encoding": "base64"
+                }
+            })
+        ]) + "\n"
+        return ndjson_payload.encode("utf-8")
+
+    @classmethod
     def _trigger_hf_sync(cls) -> None:
         """Agenda sincronização serializada com o Dataset privado no Hugging Face Hub."""
         cls._hf_dirty = True
         if not cls._hf_worker_running:
             cls._hf_worker_running = True
-            asyncio.create_task(cls._hf_sync_worker())
+            cls._hf_sync_task = asyncio.create_task(cls._hf_sync_worker())
 
     @classmethod
     async def _hf_sync_worker(cls) -> None:
@@ -243,27 +292,12 @@ class CloudStorage:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 while cls._hf_dirty:
                     cls._hf_dirty = False
-                    serialized = json.dumps(cls._guilds_data, indent=2, ensure_ascii=False)
-                    b64_content = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
-                    ndjson_payload = "\n".join([
-                        json.dumps({
-                            "key": "header",
-                            "value": {"summary": "chore(db): auto-sync ticket configurations"}
-                        }),
-                        json.dumps({
-                            "key": "file",
-                            "value": {
-                                "content": b64_content,
-                                "path": "cloud_backup.json",
-                                "encoding": "base64"
-                            }
-                        })
-                    ]) + "\n"
+                    payload_bytes = cls._build_hf_commit_payload()
 
                     saved = False
-                    for attempt in range(2):
+                    for attempt in range(3):
                         try:
-                            async with session.post(url, headers=headers, data=ndjson_payload.encode("utf-8")) as resp:
+                            async with session.post(url, headers=headers, data=payload_bytes) as resp:
                                 if resp.status in (200, 201):
                                     logger.info(f"Configurações persistidas no Hugging Face Dataset ({config.HF_DB_REPO}).")
                                     saved = True
@@ -273,12 +307,44 @@ class CloudStorage:
                                     logger.error(f"Erro ao salvar no HF Dataset (tentativa {attempt+1}, {resp.status}): {err_txt[:200]}")
                         except Exception as e:
                             logger.error(f"Falha de rede ao salvar no HF Dataset (tentativa {attempt+1}): {e}")
-                        if not saved and attempt == 0:
-                            await asyncio.sleep(1.0)
+                        if not saved and attempt < 2:
+                            await asyncio.sleep(1.0 * (attempt + 1))
         finally:
             cls._hf_worker_running = False
+            cls._hf_sync_task = None
             if cls._hf_dirty:
                 cls._trigger_hf_sync()
+
+    @classmethod
+    async def flush(cls) -> None:
+        """Aguarda a conclusão de qualquer sincronização pendente com a nuvem."""
+        if cls._hf_sync_task is not None and not cls._hf_sync_task.done():
+            try:
+                await asyncio.wait_for(cls._hf_sync_task, timeout=15)
+            except Exception as e:
+                logger.warning(f"Aviso ao aguardar flush do CloudStorage: {e}")
+
+    @classmethod
+    def flush_sync(cls) -> None:
+        """Flush síncrono de emergência durante encerramento do processo (SIGTERM/atexit)."""
+        cls._save_to_local_disk()
+        if not cls._hf_dirty or not config.HF_DB_TOKEN or not config.HF_DB_REPO:
+            return
+        try:
+            url = f"https://huggingface.co/api/datasets/{config.HF_DB_REPO}/commit/main"
+            headers = {
+                "Authorization": f"Bearer {config.HF_DB_TOKEN}",
+                "Content-Type": "application/x-ndjson",
+                "User-Agent": "NiveSalers-Bot"
+            }
+            payload_bytes = cls._build_hf_commit_payload()
+            req = urllib.request.Request(url, data=payload_bytes, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status in (200, 201):
+                    cls._hf_dirty = False
+                    logger.info("Flush síncrono de configurações para o HF Dataset concluído no encerramento.")
+        except Exception as e:
+            logger.warning(f"Aviso no flush síncrono de encerramento: {e}")
 
     @classmethod
     async def _sync_from_github(cls) -> None:
@@ -302,8 +368,8 @@ class CloudStorage:
                         remote_data = json.loads(decoded)
                         if isinstance(remote_data, dict):
                             for gid, cfg in remote_data.items():
-                                if gid not in cls._guilds_data:
-                                    cls._guilds_data[gid] = cfg
+                                gid_str = str(gid)
+                                cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
                             logger.info(f"Backup na nuvem restaurado via GitHub: {len(remote_data)} servidores.")
                             cls._save_to_local_disk()
         except Exception as e:
@@ -323,8 +389,9 @@ class CloudStorage:
         }
 
         try:
-            serialized = json.dumps(cls._guilds_data, indent=2, ensure_ascii=False)
-            b64_content = base64.b64encode(serialized.encode("utf-8")).decode("utf-8")
+            snapshot = copy.deepcopy(cls._guilds_data)
+            serialized = json.dumps(snapshot, indent=2, ensure_ascii=False)
+            b64_content = base64.b64encode(serialized.encode("utf-8")).decode("ascii")
 
             async with aiohttp.ClientSession() as session:
                 sha = None
