@@ -220,7 +220,7 @@ def format_business_hours_panel_text(guild_id: str) -> str:
     """Retorna o texto do painel de horário de atendimento com o status de cada dia da semana."""
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
-    emoji_online = EmojiManager.get("online", fallback="🟢")
+    emoji_online = EmojiManager.get("on", fallback="<:on:1561908741073281054>")
     emoji_off = EmojiManager.get("off", fallback="⚪")
 
     cfg = CloudStorage.get_guild_config(guild_id)
@@ -1339,7 +1339,7 @@ class HorarioDiaSelect(discord.ui.Select):
         self.user_id = user_id
 
         dias = _get_dias_horario(cfg)
-        emoji_online = resolve_partial_emoji("online", "🟢")
+        emoji_online = resolve_partial_emoji("on", "🟢")
         emoji_off = resolve_partial_emoji("off", "⚪")
 
         options = []

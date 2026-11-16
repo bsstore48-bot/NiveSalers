@@ -93,5 +93,11 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "folder",
         "tag": "<:folder:1561907786986561586>",
         "fallback": "📁"
+    },
+    "on": {
+        "id": "1561908741073281054",
+        "name": "on",
+        "tag": "<:on:1561908741073281054>",
+        "fallback": "🟢"
     }
 }
