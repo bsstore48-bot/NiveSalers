@@ -2946,6 +2946,10 @@ async def handle_ticket_panel_action(
                 )
 
         emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+        if EmojiManager.needs_remote_resolve(emoji_correto, guild=interaction.guild):
+            emoji_correto = await EmojiManager.resolve_or_clone_emoji(
+                emoji_correto, guild=interaction.guild, bot=interaction.client
+            )
         await interaction.followup.send(
             f"{emoji_correto} Você assumiu este ticket!",
             ephemeral=True

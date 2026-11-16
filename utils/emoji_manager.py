@@ -55,15 +55,23 @@ class EmojiManager:
     def get(cls, name: str, fallback: Optional[str] = None) -> str:
         """
         Retorna a tag formatada do emoji (ex: '<:bot:1557140838285582438>').
-        Prioriza o emoji sincronizado da aplicação ou o fallback configurado.
+        Prioriza o emoji sincronizado/clonado da aplicação ou o fallback configurado.
         """
         if not cls._cache:
             cls.load_cache()
         if name in cls._cache:
-            return cls._cache[name]
+            usable = cls.get_usable_tag(cls._cache[name])
+            m = CUSTOM_EMOJI_RE.match(usable)
+            if m and m.group(3) in cls._remote_by_id:
+                return usable
+            if name.lower() in cls._remote_by_name:
+                return cls._remote_by_name[name.lower()]
+            return usable
+        if name.lower() in cls._remote_by_name:
+            return cls._remote_by_name[name.lower()]
         if name in config.PRIORITY_EMOJIS:
-            return config.PRIORITY_EMOJIS[name]["tag"]
-        return fallback or (config.PRIORITY_EMOJIS.get(name, {}).get("fallback") or "🔹")
+            return cls.get_usable_tag(config.PRIORITY_EMOJIS[name]["tag"])
+        return cls.get_usable_tag(fallback) if fallback else (config.PRIORITY_EMOJIS.get(name, {}).get("fallback") or "🔹")
 
     @classmethod
     def get_usable_tag(cls, raw_emoji: Optional[str]) -> str:
@@ -559,6 +567,29 @@ class EmojiManager:
                     except Exception as ex:
                         stats["errors"] += 1
                         logger.error(f"Falha ao processar emoji '{filename}': {ex}")
+
+                # Garante que todos os PRIORITY_EMOJIS tenham um Application Emoji próprio do bot
+                for pkey, pinfo in config.PRIORITY_EMOJIS.items():
+                    peid = str(pinfo.get("id") or "")
+                    pename = str(pinfo.get("name") or pkey)
+                    if peid and peid in cls._remote_by_id:
+                        cls._cache[pkey] = cls._remote_by_id[peid]
+                    elif pename.lower() in cls._remote_by_name:
+                        mapped = cls._remote_by_name[pename.lower()]
+                        if peid:
+                            cls._cloned_source_map[peid] = mapped
+                        cls._cache[pkey] = mapped
+                    elif peid:
+                        cloned_tag = await cls._clone_to_application_emoji(
+                            emoji_id=peid,
+                            emoji_name=pename,
+                            prefer_animated=False,
+                            bot_token=bot_token,
+                            application_id=application_id
+                        )
+                        if cloned_tag:
+                            cls._cache[pkey] = cloned_tag
+                            await asyncio.sleep(0.3)
 
             os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
