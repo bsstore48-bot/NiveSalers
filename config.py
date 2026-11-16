@@ -13,7 +13,7 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "").strip()
 APPLICATION_ID = os.environ.get("APPLICATION_ID", "").strip()
 
 # Porta para o servidor HTTP embutido (Render utiliza a variável $PORT)
-PORT = int(os.environ.get("PORT", 8080))
+PORT = int(os.environ.get("PORT", 7860))
 
 # Configurações de Nuvem / Persistência
 MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or ""
@@ -79,5 +79,11 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "colors",
         "tag": "<:colors:1561906164810125362>",
         "fallback": "🎨"
+    },
+    "settings": {
+        "id": "1561908832173826048",
+        "name": "settings",
+        "tag": "<:settings:1561908832173826048>",
+        "fallback": "⚙️"
     }
 }

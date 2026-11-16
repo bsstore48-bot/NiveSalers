@@ -144,6 +144,20 @@ def format_appearance_panel_text(guild_id: str) -> str:
     return "\n".join(lines)
 
 
+def format_settings_panel_text() -> str:
+    """Retorna o texto do painel de configurações do painel."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_settings = EmojiManager.get("settings", fallback="<:settings:1561908832173826048>")
+
+    lines = [
+        f"## {emoji_bot} Painel de configurações do painel\n",
+        f"> {emoji_info} Clique nos botões abaixo para configurar funcionalidades.",
+        f"> {emoji_settings} Tudo isso que é possível configurar por aqui pode ser essencial para a melhor experiência do seu servidor."
+    ]
+    return "\n".join(lines)
+
+
 # =====================================================================
 # MODALS INTERATIVOS COM COMPONENTE NATIVO DE UPLOAD (LABEL TIPO 18 + FILE UPLOAD TIPO 19)
 # =====================================================================
@@ -609,9 +623,11 @@ class ConfigPainelSelect(discord.ui.Select):
                 is_edit=True
             )
         elif escolha == "configuracoes":
-            await interaction.response.send_message(
-                "Configurações do painel selecionadas. (Módulo em desenvolvimento)",
-                ephemeral=True
+            await render_settings_panel(
+                interaction,
+                self.guild_id or (interaction.guild_id or 0),
+                self.user_id or interaction.user.id,
+                is_edit=True
             )
 
 
@@ -742,6 +758,32 @@ def build_v2_cor_layout(guild_id: int, user_id: int):
         return None
 
 
+def build_v2_settings_layout(guild_id: int, user_id: int):
+    """
+    Constrói a árvore de LayoutView com Container para o painel de configurações do painel.
+    Sem botões e sem select menus por enquanto.
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+        text = format_settings_panel_text()
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(text),
+            accent_colour=cor_embed
+        )
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de configurações: {e}")
+        return None
+
+
 # =====================================================================
 # RENDERIZADORES COMPATÍVEIS (V2 PRIMARY COM FALLBACK AUTOMÁTICO)
 # =====================================================================
@@ -842,6 +884,35 @@ async def render_cor_panel(interaction: discord.Interaction, guild_id: int, user
             await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
     else:
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def render_settings_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+    """Renderiza o painel de configurações do painel (sem botões nem select menus por enquanto)."""
+    v2_view = build_v2_settings_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel de configurações enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de configurações: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    text = format_settings_panel_text()
+    embed = discord.Embed(description=text, color=cor_embed)
+
+    if is_edit:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=None)
+        else:
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=None)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # =====================================================================

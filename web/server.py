@@ -28,7 +28,7 @@ async def handle_root(request: web.Request) -> web.Response:
         "guilds": guild_count,
         "latency_ms": latency_ms,
         "uptime_seconds": uptime_seconds,
-        "environment": "Render Cloud"
+        "environment": "Hugging Face Spaces" if os.environ.get("SPACE_ID") else "Render / Cloud"
     }
     return web.json_response(data)
 
