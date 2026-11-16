@@ -96,6 +96,22 @@ def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
             return default_unicode
     return raw
 
+
+def resolve_category_emoji(raw_emoji: Optional[str], fallback_key: str = "folder", fallback_unicode: str = "📁"):
+    """Converte emoji personalizado (<:nome:id> / <a:nome:id>) ou Unicode salvo na categoria para SelectOption."""
+    raw = (raw_emoji or "").strip()
+    if raw:
+        if raw.startswith("<") and raw.endswith(">"):
+            try:
+                parsed = discord.PartialEmoji.from_str(raw)
+                if parsed.id is not None:
+                    return parsed
+            except Exception:
+                pass
+        elif " " not in raw and len(raw) <= 12 and not raw.isascii():
+            return raw
+    return resolve_partial_emoji(fallback_key, fallback_unicode)
+
 def format_main_panel_text() -> str:
     """Retorna o texto do painel principal de configuração."""
     emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
@@ -180,11 +196,13 @@ def format_categories_panel_text(guild_id: str) -> str:
         for idx, cat in enumerate(categorias, 1):
             nome = cat.get("nome", "Sem nome")
             desc = cat.get("descricao", "")
+            cat_emoji = (cat.get("emoji") or "").strip()
+            emoji_prefix = f"{cat_emoji} " if cat_emoji else ""
             canal_id = cat.get("canal_topicos_id")
             cargos_ids = cat.get("cargos_permitidos_ids", [])
             canal_fmt = f"<#{canal_id}>" if canal_id else "Não definido"
             cargos_fmt = ", ".join(f"<@&{rid}>" for rid in cargos_ids) if cargos_ids else "Nenhum"
-            lines.append(f"\n**{idx}. {nome}** — {desc}\nCanal: {canal_fmt} | Cargos: {cargos_fmt}")
+            lines.append(f"\n**{idx}. {emoji_prefix}{nome}** — {desc}\nCanal: {canal_fmt} | Cargos: {cargos_fmt}")
 
     return "\n".join(lines)
 
@@ -459,13 +477,14 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
 
 
 class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
-    """Modal com 4 abas (Label Type 18) para criar ou editar uma categoria de atendimento."""
+    """Modal com 5 abas (Label Type 18) para criar ou editar uma categoria de atendimento."""
     def __init__(
         self,
         guild_id: int,
         user_id: int,
         edit_cat_id: Optional[str] = None,
-        categoria_atual: Optional[Dict[str, Any]] = None
+        categoria_atual: Optional[Dict[str, Any]] = None,
+        include_select_defaults: bool = True
     ):
         modal_title = "Editar Categoria" if categoria_atual is not None else "Criar Categoria"
         super().__init__(title=modal_title)
@@ -473,11 +492,13 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         self.user_id = user_id
         self.edit_cat_id = edit_cat_id
         self.categoria_atual = categoria_atual
+        self.include_select_defaults = include_select_defaults
 
     def to_components(self) -> List[Dict[str, Any]]:
         cat = self.categoria_atual or {}
         nome_atual = (cat.get("nome") or "").strip()[:50]
         desc_atual = (cat.get("descricao") or "").strip()[:50]
+        emoji_atual = (cat.get("emoji") or "").strip()[:100]
         canal_atual = cat.get("canal_topicos_id")
         cargos_atuais = cat.get("cargos_permitidos_ids") or []
 
@@ -505,6 +526,18 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         if desc_atual:
             comp_desc["value"] = desc_atual
 
+        comp_emoji: Dict[str, Any] = {
+            "type": 4,
+            "custom_id": "cat_emoji",
+            "style": 1,
+            "placeholder": "Ex: 🎫 ou <:suporte:123456789012345678>",
+            "min_length": 0,
+            "max_length": 100,
+            "required": False
+        }
+        if emoji_atual:
+            comp_emoji["value"] = emoji_atual
+
         comp_canal: Dict[str, Any] = {
             "type": 8,
             "custom_id": "cat_canal_topicos",
@@ -514,7 +547,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
             "max_values": 1,
             "required": True
         }
-        if canal_atual and str(canal_atual).isdigit():
+        if self.include_select_defaults and canal_atual and str(canal_atual).isdigit():
             comp_canal["default_values"] = [{"id": str(canal_atual), "type": "channel"}]
 
         comp_cargos: Dict[str, Any] = {
@@ -525,9 +558,10 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
             "max_values": 10,
             "required": True
         }
-        default_roles = [{"id": str(rid), "type": "role"} for rid in cargos_atuais if str(rid).isdigit()][:10]
-        if default_roles:
-            comp_cargos["default_values"] = default_roles
+        if self.include_select_defaults:
+            default_roles = [{"id": str(rid), "type": "role"} for rid in cargos_atuais if str(rid).isdigit()][:10]
+            if default_roles:
+                comp_cargos["default_values"] = default_roles
 
         return [
             {
@@ -541,6 +575,12 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                 "label": "Descrição da categoria",
                 "description": "Descrição breve (~25 caracteres) exibida no painel público",
                 "component": comp_desc
+            },
+            {
+                "type": 18,
+                "label": "Emoji da categoria",
+                "description": "Emoji Unicode ou personalizado (<:nome:id>) para o painel público",
+                "component": comp_emoji
             },
             {
                 "type": 18,
@@ -566,6 +606,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
     async def on_submit(self, interaction: discord.Interaction):
         nome = ""
         descricao = ""
+        emoji_cat = ""
         canal_id = None
         cargos_ids: List[str] = []
 
@@ -583,6 +624,8 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                     nome = (comp.get("value") or "").strip()
                 elif cid == "cat_descricao":
                     descricao = (comp.get("value") or "").strip()
+                elif cid == "cat_emoji":
+                    emoji_cat = (comp.get("value") or "").strip()[:100]
                 elif cid == "cat_canal_topicos":
                     vals = comp.get("values") or []
                     if vals:
@@ -605,6 +648,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                         cat["id"] = uuid.uuid4().hex[:8]
                     cat["nome"] = nome
                     cat["descricao"] = descricao
+                    cat["emoji"] = emoji_cat
                     cat["canal_topicos_id"] = canal_id
                     cat["cargos_permitidos_ids"] = cargos_ids
                     updated = True
@@ -614,6 +658,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                     "id": uuid.uuid4().hex[:8],
                     "nome": nome,
                     "descricao": descricao,
+                    "emoji": emoji_cat,
                     "canal_topicos_id": canal_id,
                     "cargos_permitidos_ids": cargos_ids
                 })
@@ -623,6 +668,7 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                 "id": uuid.uuid4().hex[:8],
                 "nome": nome,
                 "descricao": descricao,
+                "emoji": emoji_cat,
                 "canal_topicos_id": canal_id,
                 "cargos_permitidos_ids": cargos_ids
             }
@@ -932,19 +978,19 @@ class RemoverCategoriaSelect(discord.ui.Select):
         self.guild_id = guild_id
         self.user_id = user_id
 
-        emoji_folder = resolve_partial_emoji("folder", "📁")
         options = []
         for idx, cat in enumerate(categorias[:25]):
             nome = (cat.get("nome") or f"Categoria {idx + 1}").strip()[:100]
             desc_raw = (cat.get("descricao") or "").strip()
             desc = desc_raw[:100] if desc_raw else None
             val = str(cat.get("id") or f"idx_{idx}")[:100]
+            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁")
             options.append(
                 discord.SelectOption(
                     label=nome,
                     value=val,
                     description=desc,
-                    emoji=emoji_folder
+                    emoji=opt_emoji
                 )
             )
 
@@ -991,19 +1037,19 @@ class EditarCategoriaSelect(discord.ui.Select):
         self.guild_id = guild_id
         self.user_id = user_id
 
-        emoji_folder = resolve_partial_emoji("folder", "📁")
         options = []
         for idx, cat in enumerate(categorias[:25]):
             nome = (cat.get("nome") or f"Categoria {idx + 1}").strip()[:100]
             desc_raw = (cat.get("descricao") or "").strip()
             desc = desc_raw[:100] if desc_raw else None
             val = str(cat.get("id") or f"idx_{idx}")[:100]
+            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁")
             options.append(
                 discord.SelectOption(
                     label=nome,
                     value=val,
                     description=desc,
-                    emoji=emoji_folder
+                    emoji=opt_emoji
                 )
             )
 
@@ -1037,15 +1083,34 @@ class EditarCategoriaSelect(discord.ui.Select):
             )
             return
 
-        logger.info(f"Categoria '{categoria_alvo.get(nome)}' selecionada para edição por {interaction.user}")
-        await interaction.response.send_modal(
-            CriarCategoriaModal(
-                self.guild_id or (interaction.guild_id or 0),
-                self.user_id or interaction.user.id,
-                edit_cat_id=selected_id,
-                categoria_atual=categoria_alvo
+        cat_nome_log = categoria_alvo.get("nome", selected_id)
+        logger.info(f"Categoria '{cat_nome_log}' selecionada para edição por {interaction.user}")
+
+        gid_int = self.guild_id or (interaction.guild_id or 0)
+        uid_int = self.user_id or interaction.user.id
+
+        try:
+            await interaction.response.send_modal(
+                CriarCategoriaModal(
+                    gid_int,
+                    uid_int,
+                    edit_cat_id=selected_id,
+                    categoria_atual=categoria_alvo,
+                    include_select_defaults=True
+                )
             )
-        )
+        except discord.HTTPException as e:
+            logger.warning(f"Falha ao abrir modal com default_values ({e}). Tentando sem default_values...")
+            if not interaction.response.is_done():
+                await interaction.response.send_modal(
+                    CriarCategoriaModal(
+                        gid_int,
+                        uid_int,
+                        edit_cat_id=selected_id,
+                        categoria_atual=categoria_alvo,
+                        include_select_defaults=False
+                    )
+                )
 
 
 class VoltarParaCategoriasButton(discord.ui.Button):
