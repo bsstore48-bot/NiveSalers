@@ -19,7 +19,9 @@ ASSETS_PATH = os.path.join(_BASE_DIR, "assets", "emojis")
 CACHE_FILE = os.path.join(_BASE_DIR, "database", "emojis_cache.json")
 
 CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([a-zA-Z0-9_]{1,32}):(\d{15,25})>$")
+CUSTOM_EMOJI_INLINE_RE = re.compile(r"<(a?):([a-zA-Z0-9_]{1,32}):(\d{15,25})>")
 SHORTCODE_RE = re.compile(r"^:?([a-zA-Z0-9_]{2,32}):?$")
+SHORTCODE_INLINE_RE = re.compile(r"(?<!<)(?<!<a):([a-zA-Z0-9_]{2,32}):(?!\d+>)")
 RAW_ID_RE = re.compile(r"^(\d{15,25})$")
 
 
@@ -34,12 +36,10 @@ class EmojiManager:
 
     @classmethod
     def load_cache(cls) -> None:
-        """Carrega cache local de emojis."""
+        """Carrega cache local de emojis (sem assumir IDs legados como pertencentes ao bot atual)."""
         for k, v in config.PRIORITY_EMOJIS.items():
-            cls._cache[k] = v["tag"]
-            if v.get("id"):
-                cls._remote_by_id[str(v["id"])] = v["tag"]
-            cls._remote_by_name[k.lower()] = v["tag"]
+            if k not in cls._cache:
+                cls._cache[k] = v["tag"]
 
         if os.path.exists(CACHE_FILE):
             try:
@@ -47,13 +47,6 @@ class EmojiManager:
                     data = json.load(f)
                     if isinstance(data, dict):
                         cls._cache.update(data)
-                        for k, tag in data.items():
-                            if isinstance(tag, str):
-                                m = CUSTOM_EMOJI_RE.match(tag.strip())
-                                if m:
-                                    cls._remote_by_id[m.group(3)] = tag.strip()
-                                    cls._remote_by_name[m.group(2).lower()] = tag.strip()
-                                cls._remote_by_name[k.lower()] = tag.strip()
                 logger.info(f"🎨 {len(cls._cache)} emojis carregados do cache local.")
             except Exception as e:
                 logger.warning(f"Não foi possível ler cache de emojis: {e}")
@@ -178,8 +171,13 @@ class EmojiManager:
                         return f"<a:{e.name}:{e.id}>" if e.animated else f"<:{e.name}:{e.id}>"
             if bot is not None:
                 found = bot.get_emoji(int(eid))
-                if found is not None and (guild is None or getattr(found, "guild_id", None) == getattr(guild, "id", None)):
+                if found is not None:
                     return str(found)
+            priority_ids = {str(v.get("id")) for v in config.PRIORITY_EMOJIS.values() if v.get("id")}
+            if eid in priority_ids and ename.lower() in cls._remote_by_name:
+                mapped = cls._remote_by_name[ename.lower()]
+                cls._cloned_source_map[eid] = mapped
+                return mapped
 
             cloned = await cls._clone_to_application_emoji(
                 emoji_id=eid,
@@ -308,6 +306,128 @@ class EmojiManager:
         return None
 
     @classmethod
+    def _lookup_shortcode_tag(cls, name: str, *, guild=None, bot=None) -> Optional[str]:
+        """Procura um emoji pelo nome no servidor atual, Application Emojis do bot ou demais servidores do bot."""
+        sname = (name or "").strip().lower()
+        if not sname:
+            return None
+        if guild is not None:
+            for e in getattr(guild, "emojis", []):
+                if e.name.lower() == sname:
+                    return f"<a:{e.name}:{e.id}>" if e.animated else f"<:{e.name}:{e.id}>"
+        if sname in cls._remote_by_name:
+            return cls._remote_by_name[sname]
+        if bot is not None:
+            for e in getattr(bot, "emojis", []):
+                if e.name.lower() == sname:
+                    return f"<a:{e.name}:{e.id}>" if e.animated else f"<:{e.name}:{e.id}>"
+        if cls._synced and sname in cls._cache:
+            return cls._cache[sname]
+        return None
+
+    @classmethod
+    def replace_known_text_emojis(cls, text: Optional[str], *, guild=None, bot=None) -> str:
+        """Substitui de forma síncrona emojis clonados/conhecidos e :shortcodes: em textos livres."""
+        if not text:
+            return text or ""
+
+        def _repl_custom(match: re.Match) -> str:
+            eid = match.group(3)
+            if eid in cls._cloned_source_map:
+                return cls._cloned_source_map[eid]
+            if eid in cls._remote_by_id:
+                return cls._remote_by_id[eid]
+            return match.group(0)
+
+        out = CUSTOM_EMOJI_INLINE_RE.sub(_repl_custom, text)
+
+        def _repl_short(match: re.Match) -> str:
+            found = cls._lookup_shortcode_tag(match.group(1), guild=guild, bot=bot)
+            return found if found else match.group(0)
+
+        out = SHORTCODE_INLINE_RE.sub(_repl_short, out)
+        return out
+
+    @classmethod
+    def text_needs_remote_resolve(cls, text: Optional[str], guild=None) -> bool:
+        """Indica se um texto livre contém algum emoji custom externo que precise de clonagem."""
+        if not text:
+            return False
+        for m in CUSTOM_EMOJI_INLINE_RE.finditer(text):
+            eid = m.group(3)
+            if eid not in cls._cloned_source_map and not cls.is_app_or_guild_emoji(eid, guild=guild):
+                return True
+        return False
+
+    @classmethod
+    async def resolve_text_emojis(
+        cls,
+        text: Optional[str],
+        *,
+        guild=None,
+        bot=None,
+        bot_token: str = "",
+        application_id: str = ""
+    ) -> str:
+        """
+        Resolve todos os emojis personalizados (<:nome:id>, <a:nome:id> e :nome:) dentro de um texto
+        (ex: Título ou Descrição do painel), clonando emojis externos para Application Emojis do bot.
+        """
+        if not text:
+            return ""
+
+        result = text
+        # 1. Resolve tags <:nome:id> / <a:nome:id> preservando todas as ocorrências
+        matches = list(CUSTOM_EMOJI_INLINE_RE.finditer(result))
+        if matches:
+            replacements: Dict[str, str] = {}
+            for m in matches:
+                full_tag = m.group(0)
+                if full_tag in replacements:
+                    continue
+                resolved = await cls.resolve_or_clone_emoji(
+                    full_tag,
+                    guild=guild,
+                    bot=bot,
+                    bot_token=bot_token,
+                    application_id=application_id
+                )
+                replacements[full_tag] = resolved or full_tag
+            for src_tag, dst_tag in replacements.items():
+                if dst_tag != src_tag:
+                    result = result.replace(src_tag, dst_tag)
+
+        # 2. Resolve :shortcodes: soltos que o modal do Discord não converte automaticamente
+        def _repl_short(match: re.Match) -> str:
+            found = cls._lookup_shortcode_tag(match.group(1), guild=guild, bot=bot)
+            return found if found else match.group(0)
+
+        result = SHORTCODE_INLINE_RE.sub(_repl_short, result)
+        return result
+
+    @classmethod
+    async def migrate_guild_appearance(cls, guild_id: str, *, guild=None, bot=None) -> bool:
+        """Migra emojis externos presentes em título e descrição do painel da guilda."""
+        from database.cloud_storage import CloudStorage
+
+        cfg = CloudStorage.get_guild_config(str(guild_id))
+        painel_cfg = cfg.get("painel", {})
+        changed = False
+
+        for field in ("titulo", "descricao"):
+            raw = painel_cfg.get(field)
+            if isinstance(raw, str) and raw.strip():
+                resolved = await cls.resolve_text_emojis(raw, guild=guild, bot=bot)
+                if resolved and resolved != raw:
+                    painel_cfg[field] = resolved
+                    changed = True
+
+        if changed:
+            await CloudStorage.save_guild_config(str(guild_id), cfg)
+            logger.info(f"🎨 Emojis de aparência migrados para Application Emojis na guilda {guild_id}.")
+        return changed
+
+    @classmethod
     async def migrate_guild_categories(cls, guild_id: str, *, guild=None, bot=None) -> bool:
         """Garante que todas as categorias de uma guilda tenham emojis renderizáveis pelo bot."""
         from database.cloud_storage import CloudStorage
@@ -373,6 +493,8 @@ class EmojiManager:
                         err_text = await resp.text()
                         logger.warning(f"Aviso ao consultar Application Emojis (status {resp.status}): {err_text}")
 
+                cls._remote_by_id.clear()
+                cls._remote_by_name.clear()
                 remote_map = {}
                 for e in existing_remote:
                     if isinstance(e, dict) and "name" in e and "id" in e:
@@ -450,6 +572,7 @@ class EmojiManager:
             for gid in list(CloudStorage._guilds_data.keys()):
                 g_obj = bot.get_guild(int(gid)) if (bot and str(gid).isdigit()) else None
                 await cls.migrate_guild_categories(gid, guild=g_obj, bot=bot)
+                await cls.migrate_guild_appearance(gid, guild=g_obj, bot=bot)
 
             return {"status": "success", "stats": stats}
 

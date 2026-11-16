@@ -203,8 +203,8 @@ def format_appearance_panel_text(guild_id: str) -> str:
     painel_cfg = cfg.get("painel", {})
     app = _get_configured_appearance(painel_cfg)
 
-    titulo = app["titulo"] or "Não definido"
-    descricao = app["descricao"] or "Não definido"
+    titulo = EmojiManager.replace_known_text_emojis(app["titulo"]) if app["titulo"] else "Não definido"
+    descricao = EmojiManager.replace_known_text_emojis(app["descricao"]) if app["descricao"] else "Não definido"
     banner = app["banner_url"] or "Não definido"
     thumbnail = app["thumbnail_url"] or "Não definido"
     cor = app["cor_hex"] or (f"#{app['cor']:06X}" if app["cor"] is not None else "Não definido")
@@ -358,6 +358,13 @@ class TituloModal(discord.ui.Modal, title="Configurar Título"):
 
     async def on_submit(self, interaction: discord.Interaction):
         novo_titulo = self.titulo_input.value.strip()
+        if EmojiManager.text_needs_remote_resolve(novo_titulo, guild=interaction.guild) and not interaction.response.is_done():
+            await interaction.response.defer()
+        novo_titulo = await EmojiManager.resolve_text_emojis(
+            novo_titulo,
+            guild=interaction.guild,
+            bot=interaction.client
+        )
         gid_int = self.guild_id or (interaction.guild_id or 0)
         gid_str = str(gid_int or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
@@ -398,6 +405,13 @@ class DescricaoModal(discord.ui.Modal, title="Configurar Descrição"):
 
     async def on_submit(self, interaction: discord.Interaction):
         nova_descricao = self.descricao_input.value.strip()
+        if EmojiManager.text_needs_remote_resolve(nova_descricao, guild=interaction.guild) and not interaction.response.is_done():
+            await interaction.response.defer()
+        nova_descricao = await EmojiManager.resolve_text_emojis(
+            nova_descricao,
+            guild=interaction.guild,
+            bot=interaction.client
+        )
         gid_int = self.guild_id or (interaction.guild_id or 0)
         gid_str = str(gid_int or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
@@ -1915,15 +1929,34 @@ async def render_main_panel(interaction: discord.Interaction, guild_id: int, use
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
+async def _ensure_guild_appearance_emojis(interaction: discord.Interaction, guild_id: int) -> None:
+    """Migra emojis externos em título/descrição antes de renderizar o painel."""
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    painel_cfg = cfg.get("painel", {})
+    for field in ("titulo", "descricao"):
+        raw = painel_cfg.get(field)
+        if isinstance(raw, str) and EmojiManager.text_needs_remote_resolve(raw, guild=interaction.guild):
+            await EmojiManager.migrate_guild_appearance(gid_str, guild=interaction.guild, bot=interaction.client)
+            break
+
+
 async def render_appearance_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
     """Renderiza o painel de aparência com Componentes V2 (Container + botões)."""
+    await _ensure_guild_appearance_emojis(interaction, guild_id)
     v2_view = build_v2_appearance_layout(guild_id, user_id)
     if v2_view is not None:
         try:
             if is_edit:
-                await interaction.response.edit_message(view=v2_view)
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
             else:
-                await interaction.response.send_message(view=v2_view, ephemeral=True)
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel de aparência enviado com Componentes V2 (Container)")
             return
         except Exception as e:
@@ -2286,10 +2319,12 @@ def build_v2_public_ticket_layout(guild_id: int, guild=None):
 
         container_items: List[Any] = []
         text_parts: List[str] = []
-        if app["titulo"]:
-            text_parts.append(f"## {app['titulo']}")
-        if app["descricao"]:
-            text_parts.append(app["descricao"])
+        titulo_vis = EmojiManager.replace_known_text_emojis(app["titulo"], guild=guild) if app["titulo"] else None
+        desc_vis = EmojiManager.replace_known_text_emojis(app["descricao"], guild=guild) if app["descricao"] else None
+        if titulo_vis:
+            text_parts.append(f"## {titulo_vis}")
+        if desc_vis:
+            text_parts.append(desc_vis)
 
         has_section = hasattr(discord.ui, "Section") and hasattr(discord.ui, "Thumbnail")
         has_gallery = hasattr(discord.ui, "MediaGallery") and hasattr(discord, "MediaGalleryItem")
@@ -2354,13 +2389,21 @@ def build_fallback_public_ticket_payload(guild_id: int, guild=None) -> Dict[str,
     if categorias:
         view.add_item(PublicTicketCategorySelect(guild_id, categorias, guild=guild))
 
-    has_embed_content = any([app["titulo"], app["descricao"], app["banner_url"], app["thumbnail_url"]])
+    titulo_vis = EmojiManager.replace_known_text_emojis(app["titulo"], guild=guild) if app["titulo"] else None
+    desc_vis = EmojiManager.replace_known_text_emojis(app["descricao"], guild=guild) if app["descricao"] else None
+    has_embed_content = any([titulo_vis, desc_vis, app["banner_url"], app["thumbnail_url"]])
     if has_embed_content:
         embed_kwargs: Dict[str, Any] = {}
-        if app["titulo"]:
-            embed_kwargs["title"] = app["titulo"]
-        if app["descricao"]:
-            embed_kwargs["description"] = app["descricao"]
+        has_custom_emoji_in_title = bool(titulo_vis and ("<:" in titulo_vis or "<a:" in titulo_vis))
+        if titulo_vis and not has_custom_emoji_in_title:
+            embed_kwargs["title"] = titulo_vis
+            if desc_vis:
+                embed_kwargs["description"] = desc_vis
+        elif titulo_vis and has_custom_emoji_in_title:
+            combined = f"## {titulo_vis}\n\n{desc_vis}" if desc_vis else f"## {titulo_vis}"
+            embed_kwargs["description"] = combined
+        elif desc_vis:
+            embed_kwargs["description"] = desc_vis
         if app["cor"] is not None:
             embed_kwargs["color"] = app["cor"]
         embed = discord.Embed(**embed_kwargs)
@@ -2485,6 +2528,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                 return
 
         await _ensure_guild_category_emojis(interaction, gid_int)
+        await _ensure_guild_appearance_emojis(interaction, gid_int)
 
         sent_msg = None
         v2_view = build_v2_public_ticket_layout(gid_int, guild=interaction.guild)
