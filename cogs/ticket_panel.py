@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 import uuid
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import discord
 from discord import app_commands
@@ -2280,28 +2281,53 @@ async def render_edit_category_panel(interaction: discord.Interaction, guild_id:
 _handled_public_interactions: List[int] = []
 
 
+def format_ticket_welcome_text(
+    user_mention: str,
+    cat_nome: str,
+    atendente_text: str,
+    data_criacao: str,
+    horario_criacao: str,
+) -> str:
+    """Retorna o texto padronizado do painel enviado dentro do tópico do ticket."""
+    emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+    emoji_rocket = EmojiManager.get("rocket", fallback="<:rocket:1561482854133669908>")
+    emoji_calendar = EmojiManager.get("calendar", fallback="<:calendar:1561906133155708989>")
+    emoji_clock = EmojiManager.get("clock", fallback="<:clock:1561906156593479740>")
+
+    return (
+        f"## {emoji_member} {cat_nome}  —  {user_mention}\n\n"
+        f"> {emoji_info} Informe o que precisa com detalhes  para que nossa equipe consiga resolver seu caso.\n"
+        f"> \n"
+        f"> {emoji_member} Dono do ticket: {user_mention}\n"
+        f"> {emoji_rocket} Atendente: {atendente_text}\n"
+        f"> {emoji_calendar} Data de criação: {data_criacao}\n"
+        f"> {emoji_clock} Horário de criação: {horario_criacao}"
+    )
+
+
 def build_v2_ticket_welcome_layout(
     user_mention: str,
     cat_nome: str,
-    roles_mention: str,
+    atendente_text: str,
+    data_criacao: str,
+    horario_criacao: str,
     accent_color: int,
 ):
-    """Constrói a mensagem inicial em Components V2 dentro do tópico privado do ticket."""
+    """Constrói o painel inicial em Components V2 dentro do tópico privado do ticket."""
     if not HAS_COMPONENTS_V2:
         return None
     try:
-        emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
-        emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
-        lines = [
-            f"## {emoji_bot} Ticket — {cat_nome}",
-            "",
-            f"> {emoji_info} Olá {user_mention}, seu atendimento foi iniciado! Aguarde um membro da equipe.",
-        ]
-        if roles_mention:
-            lines.append(f"> Equipe responsável: {roles_mention}")
+        text = format_ticket_welcome_text(
+            user_mention=user_mention,
+            cat_nome=cat_nome,
+            atendente_text=atendente_text,
+            data_criacao=data_criacao,
+            horario_criacao=horario_criacao,
+        )
         layout_view = discord.ui.LayoutView(timeout=None)
         container = discord.ui.Container(
-            discord.ui.TextDisplay("\n".join(lines)),
+            discord.ui.TextDisplay(text),
             accent_colour=accent_color
         )
         layout_view.add_item(container)
@@ -2416,25 +2442,54 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
     accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
 
     cargos_ids = [str(rid) for rid in (categoria_alvo.get("cargos_permitidos_ids") or []) if str(rid).isdigit()]
-    roles_mention = " ".join(f"<@&{rid}>" for rid in cargos_ids)
-    allowed_mentions = discord.AllowedMentions(users=True, roles=True)
+    brt_tz = timezone(timedelta(hours=-3))
+    now_brt = datetime.now(brt_tz)
+    data_criacao = now_brt.strftime("%d/%m/%Y")
+    horario_criacao = now_brt.strftime("%H:%M")
+    atendente_text = "Não assumido"
 
+    allowed_mentions = discord.AllowedMentions(users=True, roles=False)
     welcome_v2 = build_v2_ticket_welcome_layout(
         user_mention=interaction.user.mention,
         cat_nome=cat_nome,
-        roles_mention=roles_mention,
+        atendente_text=atendente_text,
+        data_criacao=data_criacao,
+        horario_criacao=horario_criacao,
         accent_color=accent_color,
     )
     try:
         if welcome_v2 is not None:
             await thread.send(view=welcome_v2, allowed_mentions=allowed_mentions)
         else:
-            fallback_txt = f"Olá {interaction.user.mention}! Seu ticket na categoria **{cat_nome}** foi aberto."
-            if roles_mention:
-                fallback_txt += f"\nEquipe: {roles_mention}"
-            await thread.send(fallback_txt, allowed_mentions=allowed_mentions)
+            fallback_txt = format_ticket_welcome_text(
+                user_mention=interaction.user.mention,
+                cat_nome=cat_nome,
+                atendente_text=atendente_text,
+                data_criacao=data_criacao,
+                horario_criacao=horario_criacao,
+            )
+            await thread.send(
+                embed=discord.Embed(description=fallback_txt, color=accent_color),
+                allowed_mentions=allowed_mentions
+            )
     except Exception as e:
         logger.warning(f"Aviso ao enviar mensagem inicial no tópico {thread.id}: {e}")
+
+    # Adiciona membros dos cargos permitidos ao tópico privado sem sujar o chat
+    if interaction.guild and cargos_ids:
+        added_ids = {interaction.user.id}
+        for rid in cargos_ids:
+            role_obj = interaction.guild.get_role(int(rid))
+            if not role_obj:
+                continue
+            for member in role_obj.members:
+                if member.bot or member.id in added_ids:
+                    continue
+                added_ids.add(member.id)
+                try:
+                    await thread.add_user(member)
+                except Exception:
+                    pass
 
     # Log em Canal Logs de tickets abertos se configurado
     logs_cfg = cfg.get("logs", {})

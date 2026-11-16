@@ -135,5 +135,23 @@ PRIORITY_EMOJIS: Dict[str, Dict[str, Any]] = {
         "name": "ban",
         "tag": "<:ban:1561906116030505050>",
         "fallback": "🔨"
+    },
+    "rocket": {
+        "id": "1561482854133669908",
+        "name": "rocket",
+        "tag": "<:rocket:1561482854133669908>",
+        "fallback": "🚀"
+    },
+    "calendar": {
+        "id": "1561906133155708989",
+        "name": "calendar",
+        "tag": "<:calendar:1561906133155708989>",
+        "fallback": "📅"
+    },
+    "clock": {
+        "id": "1561906156593479740",
+        "name": "clock",
+        "tag": "<:clock:1561906156593479740>",
+        "fallback": "🕒"
     }
 }
