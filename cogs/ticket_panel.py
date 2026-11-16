@@ -203,6 +203,20 @@ def format_remove_category_panel_text(has_categories: bool = True) -> str:
     return text
 
 
+def format_edit_category_panel_text(has_categories: bool = True) -> str:
+    """Retorna o texto do painel de edição de categoria."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+
+    text = (
+        f"## {emoji_bot} Editar categoria\n\n"
+        f"{emoji_info} Selecione a categoria que deseja editar, usando o select menu abaixo."
+    )
+    if not has_categories:
+        text += "\n\n> Nenhuma categoria existente no momento."
+    return text
+
+
 # =====================================================================
 # MODALS INTERATIVOS COM COMPONENTE NATIVO DE UPLOAD (LABEL TIPO 18 + FILE UPLOAD TIPO 19)
 # =====================================================================
@@ -445,68 +459,100 @@ class ThumbnailModal(discord.ui.Modal, title="Configurar Thumbnail"):
 
 
 class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
-    """Modal com 4 abas (Label Type 18) para criar uma nova categoria de atendimento."""
-    def __init__(self, guild_id: int, user_id: int):
-        super().__init__()
+    """Modal com 4 abas (Label Type 18) para criar ou editar uma categoria de atendimento."""
+    def __init__(
+        self,
+        guild_id: int,
+        user_id: int,
+        edit_cat_id: Optional[str] = None,
+        categoria_atual: Optional[Dict[str, Any]] = None
+    ):
+        modal_title = "Editar Categoria" if categoria_atual is not None else "Criar Categoria"
+        super().__init__(title=modal_title)
         self.guild_id = guild_id
         self.user_id = user_id
+        self.edit_cat_id = edit_cat_id
+        self.categoria_atual = categoria_atual
 
     def to_components(self) -> List[Dict[str, Any]]:
+        cat = self.categoria_atual or {}
+        nome_atual = (cat.get("nome") or "").strip()[:50]
+        desc_atual = (cat.get("descricao") or "").strip()[:50]
+        canal_atual = cat.get("canal_topicos_id")
+        cargos_atuais = cat.get("cargos_permitidos_ids") or []
+
+        comp_nome: Dict[str, Any] = {
+            "type": 4,
+            "custom_id": "cat_nome",
+            "style": 1,
+            "placeholder": "Ex: Suporte Técnico",
+            "min_length": 1,
+            "max_length": 50,
+            "required": True
+        }
+        if nome_atual:
+            comp_nome["value"] = nome_atual
+
+        comp_desc: Dict[str, Any] = {
+            "type": 4,
+            "custom_id": "cat_descricao",
+            "style": 1,
+            "placeholder": "Ex: Tire suas dúvidas aqui",
+            "min_length": 1,
+            "max_length": 50,
+            "required": True
+        }
+        if desc_atual:
+            comp_desc["value"] = desc_atual
+
+        comp_canal: Dict[str, Any] = {
+            "type": 8,
+            "custom_id": "cat_canal_topicos",
+            "placeholder": "Selecione o canal de texto...",
+            "channel_types": [0, 5],
+            "min_values": 1,
+            "max_values": 1,
+            "required": True
+        }
+        if canal_atual and str(canal_atual).isdigit():
+            comp_canal["default_values"] = [{"id": str(canal_atual), "type": "channel"}]
+
+        comp_cargos: Dict[str, Any] = {
+            "type": 6,
+            "custom_id": "cat_cargos_permitidos",
+            "placeholder": "Selecione os cargos permitidos...",
+            "min_values": 1,
+            "max_values": 10,
+            "required": True
+        }
+        default_roles = [{"id": str(rid), "type": "role"} for rid in cargos_atuais if str(rid).isdigit()][:10]
+        if default_roles:
+            comp_cargos["default_values"] = default_roles
+
         return [
             {
                 "type": 18,
                 "label": "Nome da categoria",
                 "description": "Nome exibido na opção do painel de atendimento",
-                "component": {
-                    "type": 4,
-                    "custom_id": "cat_nome",
-                    "style": 1,
-                    "placeholder": "Ex: Suporte Técnico",
-                    "min_length": 1,
-                    "max_length": 50,
-                    "required": True
-                }
+                "component": comp_nome
             },
             {
                 "type": 18,
                 "label": "Descrição da categoria",
                 "description": "Descrição breve (~25 caracteres) exibida no painel público",
-                "component": {
-                    "type": 4,
-                    "custom_id": "cat_descricao",
-                    "style": 1,
-                    "placeholder": "Ex: Tire suas dúvidas aqui",
-                    "min_length": 1,
-                    "max_length": 50,
-                    "required": True
-                }
+                "component": comp_desc
             },
             {
                 "type": 18,
                 "label": "Canal de tópicos",
                 "description": "Onde o bot abrirá os tópicos privados de atendimento",
-                "component": {
-                    "type": 8,
-                    "custom_id": "cat_canal_topicos",
-                    "placeholder": "Selecione o canal de texto...",
-                    "channel_types": [0, 5],
-                    "min_values": 1,
-                    "max_values": 1,
-                    "required": True
-                }
+                "component": comp_canal
             },
             {
                 "type": 18,
                 "label": "Cargos permitidos",
                 "description": "Cargos que poderão participar dos tópicos privados",
-                "component": {
-                    "type": 6,
-                    "custom_id": "cat_cargos_permitidos",
-                    "placeholder": "Selecione os cargos permitidos...",
-                    "min_values": 1,
-                    "max_values": 10,
-                    "required": True
-                }
+                "component": comp_cargos
             }
         ]
 
@@ -550,23 +596,46 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
         if not isinstance(cfg.get("categorias_ticket"), list):
             cfg["categorias_ticket"] = []
 
-        nova_categoria = {
-            "id": uuid.uuid4().hex[:8],
-            "nome": nome,
-            "descricao": descricao,
-            "canal_topicos_id": canal_id,
-            "cargos_permitidos_ids": cargos_ids
-        }
-        cfg["categorias_ticket"].append(nova_categoria)
-        await CloudStorage.save_guild_config(gid_str, cfg)
+        if self.edit_cat_id is not None:
+            updated = False
+            for idx, cat in enumerate(cfg["categorias_ticket"]):
+                cat_val = str(cat.get("id") or f"idx_{idx}")
+                if cat_val == self.edit_cat_id:
+                    if not cat.get("id"):
+                        cat["id"] = uuid.uuid4().hex[:8]
+                    cat["nome"] = nome
+                    cat["descricao"] = descricao
+                    cat["canal_topicos_id"] = canal_id
+                    cat["cargos_permitidos_ids"] = cargos_ids
+                    updated = True
+                    break
+            if not updated:
+                cfg["categorias_ticket"].append({
+                    "id": uuid.uuid4().hex[:8],
+                    "nome": nome,
+                    "descricao": descricao,
+                    "canal_topicos_id": canal_id,
+                    "cargos_permitidos_ids": cargos_ids
+                })
+            logger.info(f"Categoria '{nome}' atualizada por {interaction.user} na guilda {gid_str}")
+        else:
+            nova_categoria = {
+                "id": uuid.uuid4().hex[:8],
+                "nome": nome,
+                "descricao": descricao,
+                "canal_topicos_id": canal_id,
+                "cargos_permitidos_ids": cargos_ids
+            }
+            cfg["categorias_ticket"].append(nova_categoria)
+            logger.info(f"Nova categoria '{nome}' criada por {interaction.user} na guilda {gid_str}")
 
-        logger.info(f"Nova categoria '{nome}' criada por {interaction.user} na guilda {gid_str}")
+        await CloudStorage.save_guild_config(gid_str, cfg)
         await render_categories_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id, is_edit=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        logger.error(f"Erro no modal de criar categoria: {error}", exc_info=True)
+        logger.error(f"Erro no modal de categoria: {error}", exc_info=True)
         if not interaction.response.is_done():
-            await interaction.response.send_message(f"Ocorreu um erro ao criar categoria: {error}", ephemeral=True)
+            await interaction.response.send_message(f"Ocorreu um erro ao salvar categoria: {error}", ephemeral=True)
 
 
 # =====================================================================
@@ -725,7 +794,7 @@ class RemoverCategoriaButton(discord.ui.Button):
 
 
 class EditarCategoriaButton(discord.ui.Button):
-    """Botão cinza Editar categoria (sem ação por enquanto)."""
+    """Botão cinza Editar categoria (abre painel com select menu das categorias existentes)."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Editar categoria",
@@ -738,8 +807,13 @@ class EditarCategoriaButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Botão Editar categoria clicado por {interaction.user} (sem ação por enquanto)")
-        await interaction.response.defer()
+        logger.info(f"Botão Editar categoria clicado por {interaction.user} (abrindo painel de edição)")
+        await render_edit_category_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
 
 
 class VoltarParaSistemaButton(discord.ui.Button):
@@ -911,14 +985,77 @@ class RemoverCategoriaSelect(discord.ui.Select):
         )
 
 
+class EditarCategoriaSelect(discord.ui.Select):
+    """Select Menu contendo as categorias existentes para edição via modal."""
+    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]]):
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        emoji_folder = resolve_partial_emoji("folder", "📁")
+        options = []
+        for idx, cat in enumerate(categorias[:25]):
+            nome = (cat.get("nome") or f"Categoria {idx + 1}").strip()[:100]
+            desc_raw = (cat.get("descricao") or "").strip()
+            desc = desc_raw[:100] if desc_raw else None
+            val = str(cat.get("id") or f"idx_{idx}")[:100]
+            options.append(
+                discord.SelectOption(
+                    label=nome,
+                    value=val,
+                    description=desc,
+                    emoji=emoji_folder
+                )
+            )
+
+        super().__init__(
+            placeholder="Selecione a categoria para editar...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="select_editar_categoria"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_id = self.values[0]
+        gid = str(self.guild_id or interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid)
+        categorias = cfg.get("categorias_ticket", [])
+
+        categoria_alvo = None
+        for idx, cat in enumerate(categorias):
+            cat_val = str(cat.get("id") or f"idx_{idx}")
+            if cat_val == selected_id:
+                categoria_alvo = cat
+                break
+
+        if categoria_alvo is None:
+            await render_categories_panel(
+                interaction,
+                self.guild_id or (interaction.guild_id or 0),
+                self.user_id or interaction.user.id,
+                is_edit=True
+            )
+            return
+
+        logger.info(f"Categoria '{categoria_alvo.get(nome)}' selecionada para edição por {interaction.user}")
+        await interaction.response.send_modal(
+            CriarCategoriaModal(
+                self.guild_id or (interaction.guild_id or 0),
+                self.user_id or interaction.user.id,
+                edit_cat_id=selected_id,
+                categoria_atual=categoria_alvo
+            )
+        )
+
+
 class VoltarParaCategoriasButton(discord.ui.Button):
-    """Botão Voltar do painel de remoção de categoria: sempre azul na última linha separada."""
-    def __init__(self, guild_id: int, user_id: int):
+    """Botão Voltar dos subpainéis de categoria: sempre azul na última linha separada."""
+    def __init__(self, guild_id: int, user_id: int, custom_id: str = "btn_remover_categoria_voltar"):
         super().__init__(
             label="Voltar",
             emoji=resolve_partial_emoji("back", "⬅️"),
             style=discord.ButtonStyle.primary,
-            custom_id="btn_remover_categoria_voltar",
+            custom_id=custom_id,
             row=1
         )
         self.guild_id = guild_id
@@ -1248,6 +1385,55 @@ def build_v2_remove_category_layout(guild_id: int, user_id: int):
         return None
 
 
+def build_v2_edit_category_layout(guild_id: int, user_id: int):
+    """
+    Constrói a árvore de LayoutView com Container para o painel de Editar categoria.
+    Contém as categorias existentes no Select Menu + botão Voltar azul na última linha.
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+        categorias = cfg.get("categorias_ticket", [])
+        text = format_edit_category_panel_text(has_categories=bool(categorias))
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
+        row_voltar = discord.ui.ActionRow(
+            VoltarParaCategoriasButton(guild_id, user_id, custom_id="btn_editar_categoria_voltar")
+        )
+
+        if categorias:
+            row_select = discord.ui.ActionRow(EditarCategoriaSelect(guild_id, user_id, categorias))
+            container = discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                separator,
+                row_select,
+                row_voltar,
+                accent_colour=cor_embed
+            )
+        else:
+            container = discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                separator,
+                row_voltar,
+                accent_colour=cor_embed
+            )
+
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de editar categoria: {e}")
+        return None
+
+
 # =====================================================================
 # RENDERIZADORES COMPATÍVEIS (V2 PRIMARY COM FALLBACK AUTOMÁTICO)
 # =====================================================================
@@ -1440,6 +1626,40 @@ async def render_remove_category_panel(interaction: discord.Interaction, guild_i
     if categorias:
         view.add_item(RemoverCategoriaSelect(guild_id, user_id, categorias))
     view.add_item(VoltarParaCategoriasButton(guild_id, user_id))
+
+    if is_edit:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def render_edit_category_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+    """Renderiza o painel de Editar categoria com Select Menu das categorias existentes."""
+    v2_view = build_v2_edit_category_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel de editar categoria enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de editar categoria: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    categorias = cfg.get("categorias_ticket", [])
+    text = format_edit_category_panel_text(has_categories=bool(categorias))
+    embed = discord.Embed(description=text, color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    if categorias:
+        view.add_item(EditarCategoriaSelect(guild_id, user_id, categorias))
+    view.add_item(VoltarParaCategoriasButton(guild_id, user_id, custom_id="btn_editar_categoria_voltar"))
 
     if is_edit:
         if not interaction.response.is_done():
