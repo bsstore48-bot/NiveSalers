@@ -97,14 +97,14 @@ def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
     return raw
 
 
-def resolve_category_emoji(raw_emoji: Optional[str], fallback_key: str = "folder", fallback_unicode: str = "📁"):
+def resolve_category_emoji(raw_emoji: Optional[str], fallback_key: str = "folder", fallback_unicode: str = "📁", guild=None):
     """Converte emoji personalizado (<:nome:id> / <a:nome:id>) ou Unicode salvo na categoria para SelectOption."""
-    raw = (raw_emoji or "").strip()
+    raw = EmojiManager.get_usable_tag(raw_emoji)
     if raw:
         if raw.startswith("<") and raw.endswith(">"):
             try:
                 parsed = discord.PartialEmoji.from_str(raw)
-                if parsed.id is not None:
+                if parsed.id is not None and EmojiManager.is_app_or_guild_emoji(str(parsed.id), guild=guild):
                     return parsed
             except Exception:
                 pass
@@ -196,13 +196,13 @@ def format_categories_panel_text(guild_id: str) -> str:
         for idx, cat in enumerate(categorias, 1):
             nome = cat.get("nome", "Sem nome")
             desc = cat.get("descricao", "")
-            cat_emoji = (cat.get("emoji") or "").strip()
+            cat_emoji = EmojiManager.get_usable_tag(cat.get("emoji"))
             emoji_prefix = f"{cat_emoji} " if cat_emoji else ""
             canal_id = cat.get("canal_topicos_id")
             cargos_ids = cat.get("cargos_permitidos_ids", [])
             canal_fmt = f"<#{canal_id}>" if canal_id else "Não definido"
             cargos_fmt = ", ".join(f"<@&{rid}>" for rid in cargos_ids) if cargos_ids else "Nenhum"
-            lines.append(f"\n**{idx}. {emoji_prefix}{nome}** — {desc}\nCanal: {canal_fmt} | Cargos: {cargos_fmt}")
+            lines.append(f"\n**{idx}.** {emoji_prefix}**{nome}** — {desc}\nCanal: {canal_fmt} | Cargos: {cargos_fmt}")
 
     return "\n".join(lines)
 
@@ -634,6 +634,15 @@ class CriarCategoriaModal(discord.ui.Modal, title="Criar Categoria"):
                     vals = comp.get("values") or []
                     cargos_ids = [str(v) for v in vals]
 
+        if emoji_cat:
+            if EmojiManager.needs_remote_resolve(emoji_cat, guild=interaction.guild) and not interaction.response.is_done():
+                await interaction.response.defer()
+            emoji_cat = await EmojiManager.resolve_or_clone_emoji(
+                emoji_cat,
+                guild=interaction.guild,
+                bot=interaction.client
+            )
+
         gid_str = str(self.guild_id or interaction.guild_id or "direct")
         cfg = CloudStorage.get_guild_config(gid_str)
         if not isinstance(cfg.get("categorias_ticket"), list):
@@ -974,7 +983,7 @@ class VoltarParaAparenciaButton(discord.ui.Button):
 
 class RemoverCategoriaSelect(discord.ui.Select):
     """Select Menu contendo apenas as categorias existentes para remoção."""
-    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]]):
+    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]], guild=None):
         self.guild_id = guild_id
         self.user_id = user_id
 
@@ -984,7 +993,7 @@ class RemoverCategoriaSelect(discord.ui.Select):
             desc_raw = (cat.get("descricao") or "").strip()
             desc = desc_raw[:100] if desc_raw else None
             val = str(cat.get("id") or f"idx_{idx}")[:100]
-            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁")
+            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁", guild=guild)
             options.append(
                 discord.SelectOption(
                     label=nome,
@@ -1033,7 +1042,7 @@ class RemoverCategoriaSelect(discord.ui.Select):
 
 class EditarCategoriaSelect(discord.ui.Select):
     """Select Menu contendo as categorias existentes para edição via modal."""
-    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]]):
+    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]], guild=None):
         self.guild_id = guild_id
         self.user_id = user_id
 
@@ -1043,7 +1052,7 @@ class EditarCategoriaSelect(discord.ui.Select):
             desc_raw = (cat.get("descricao") or "").strip()
             desc = desc_raw[:100] if desc_raw else None
             val = str(cat.get("id") or f"idx_{idx}")[:100]
-            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁")
+            opt_emoji = resolve_category_emoji(cat.get("emoji"), "folder", "📁", guild=guild)
             options.append(
                 discord.SelectOption(
                     label=nome,
@@ -1403,7 +1412,7 @@ def build_v2_categories_layout(guild_id: int, user_id: int):
         return None
 
 
-def build_v2_remove_category_layout(guild_id: int, user_id: int):
+def build_v2_remove_category_layout(guild_id: int, user_id: int, guild=None):
     """
     Constrói a árvore de LayoutView com Container para o painel de Remover categoria.
     Contém apenas as categorias existentes no Select Menu + botão Voltar azul na última linha.
@@ -1427,7 +1436,7 @@ def build_v2_remove_category_layout(guild_id: int, user_id: int):
         row_voltar = discord.ui.ActionRow(VoltarParaCategoriasButton(guild_id, user_id))
 
         if categorias:
-            row_select = discord.ui.ActionRow(RemoverCategoriaSelect(guild_id, user_id, categorias))
+            row_select = discord.ui.ActionRow(RemoverCategoriaSelect(guild_id, user_id, categorias, guild=guild))
             container = discord.ui.Container(
                 discord.ui.TextDisplay(text),
                 separator,
@@ -1450,7 +1459,7 @@ def build_v2_remove_category_layout(guild_id: int, user_id: int):
         return None
 
 
-def build_v2_edit_category_layout(guild_id: int, user_id: int):
+def build_v2_edit_category_layout(guild_id: int, user_id: int, guild=None):
     """
     Constrói a árvore de LayoutView com Container para o painel de Editar categoria.
     Contém as categorias existentes no Select Menu + botão Voltar azul na última linha.
@@ -1476,7 +1485,7 @@ def build_v2_edit_category_layout(guild_id: int, user_id: int):
         )
 
         if categorias:
-            row_select = discord.ui.ActionRow(EditarCategoriaSelect(guild_id, user_id, categorias))
+            row_select = discord.ui.ActionRow(EditarCategoriaSelect(guild_id, user_id, categorias, guild=guild))
             container = discord.ui.Container(
                 discord.ui.TextDisplay(text),
                 separator,
@@ -1633,15 +1642,33 @@ async def render_settings_panel(interaction: discord.Interaction, guild_id: int,
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
+async def _ensure_guild_category_emojis(interaction: discord.Interaction, guild_id: int) -> None:
+    """Garante que emojis externos de categorias já salvas sejam clonados antes de renderizar."""
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    categorias = cfg.get("categorias_ticket", [])
+    if any(EmojiManager.needs_remote_resolve(c.get("emoji"), guild=interaction.guild) for c in categorias):
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await EmojiManager.migrate_guild_categories(gid_str, guild=interaction.guild, bot=interaction.client)
+
+
 async def render_categories_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
     """Renderiza o painel de Categorias com Componentes V2 (Container + Criar/Remover/Editar + Voltar)."""
+    await _ensure_guild_category_emojis(interaction, guild_id)
     v2_view = build_v2_categories_layout(guild_id, user_id)
     if v2_view is not None:
         try:
             if is_edit:
-                await interaction.response.edit_message(view=v2_view)
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
             else:
-                await interaction.response.send_message(view=v2_view, ephemeral=True)
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel de categorias enviado com Componentes V2 (Container)")
             return
         except Exception as e:
@@ -1669,13 +1696,20 @@ async def render_categories_panel(interaction: discord.Interaction, guild_id: in
 
 async def render_remove_category_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
     """Renderiza o painel de Remover categoria com Select Menu apenas das categorias existentes."""
-    v2_view = build_v2_remove_category_layout(guild_id, user_id)
+    await _ensure_guild_category_emojis(interaction, guild_id)
+    v2_view = build_v2_remove_category_layout(guild_id, user_id, guild=interaction.guild)
     if v2_view is not None:
         try:
             if is_edit:
-                await interaction.response.edit_message(view=v2_view)
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
             else:
-                await interaction.response.send_message(view=v2_view, ephemeral=True)
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel de remover categoria enviado com Componentes V2 (Container)")
             return
         except Exception as e:
@@ -1689,7 +1723,7 @@ async def render_remove_category_panel(interaction: discord.Interaction, guild_i
     embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
     if categorias:
-        view.add_item(RemoverCategoriaSelect(guild_id, user_id, categorias))
+        view.add_item(RemoverCategoriaSelect(guild_id, user_id, categorias, guild=interaction.guild))
     view.add_item(VoltarParaCategoriasButton(guild_id, user_id))
 
     if is_edit:
@@ -1703,13 +1737,20 @@ async def render_remove_category_panel(interaction: discord.Interaction, guild_i
 
 async def render_edit_category_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
     """Renderiza o painel de Editar categoria com Select Menu das categorias existentes."""
-    v2_view = build_v2_edit_category_layout(guild_id, user_id)
+    await _ensure_guild_category_emojis(interaction, guild_id)
+    v2_view = build_v2_edit_category_layout(guild_id, user_id, guild=interaction.guild)
     if v2_view is not None:
         try:
             if is_edit:
-                await interaction.response.edit_message(view=v2_view)
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(view=v2_view)
+                else:
+                    await interaction.response.edit_message(view=v2_view)
             else:
-                await interaction.response.send_message(view=v2_view, ephemeral=True)
+                if interaction.response.is_done():
+                    await interaction.followup.send(view=v2_view, ephemeral=True)
+                else:
+                    await interaction.response.send_message(view=v2_view, ephemeral=True)
             logger.info("Painel de editar categoria enviado com Componentes V2 (Container)")
             return
         except Exception as e:
@@ -1723,7 +1764,7 @@ async def render_edit_category_panel(interaction: discord.Interaction, guild_id:
     embed = discord.Embed(description=text, color=cor_embed)
     view = discord.ui.View(timeout=None)
     if categorias:
-        view.add_item(EditarCategoriaSelect(guild_id, user_id, categorias))
+        view.add_item(EditarCategoriaSelect(guild_id, user_id, categorias, guild=interaction.guild))
     view.add_item(VoltarParaCategoriasButton(guild_id, user_id, custom_id="btn_editar_categoria_voltar"))
 
     if is_edit:

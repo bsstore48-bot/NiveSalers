@@ -49,7 +49,7 @@ async def on_ready():
     token = config.DISCORD_TOKEN
     if token and app_id:
         logger.info(f"Iniciando sincronização de Application Emojis para o bot (App ID: {app_id})...")
-        asyncio.create_task(EmojiManager.sync_application_emojis(token, app_id))
+        asyncio.create_task(EmojiManager.sync_application_emojis(token, app_id, bot=bot))
 
     # 3. Sincroniza Slash Commands globalmente
     try:
