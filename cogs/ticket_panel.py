@@ -158,13 +158,11 @@ def resolve_category_emoji(raw_emoji: Optional[str], fallback_key: str = "folder
 
 def format_main_panel_text() -> str:
     """Retorna o texto do painel principal de configuração."""
-    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
     emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
     emoji_cloud = EmojiManager.get("cloud", fallback="<:cloud:1561906158984233031>")
     emoji_reload = EmojiManager.get("reload", fallback="<:reload:1561908806584115210>")
 
     lines = [
-        f"## {emoji_bot} Painel de configuração dos painéis de atendimento",
         f"{emoji_info} Selecione uma opção para configurar no painel.",
         f"{emoji_cloud} Todas as configurações serão salvas imediatamente no sistema de atendimento.",
         f"{emoji_reload} Com atualização automática de painéis de atendimento existentes."
