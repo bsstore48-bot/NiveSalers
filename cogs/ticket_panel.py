@@ -189,6 +189,20 @@ def format_categories_panel_text(guild_id: str) -> str:
     return "\n".join(lines)
 
 
+def format_remove_category_panel_text(has_categories: bool = True) -> str:
+    """Retorna o texto do painel de remoção de categoria."""
+    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
+    emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
+
+    text = (
+        f"## {emoji_bot} Remover categoria\n\n"
+        f"{emoji_info} Selecione a categoria que deseja remover, usando o select menu abaixo."
+    )
+    if not has_categories:
+        text += "\n\n> Nenhuma categoria existente no momento."
+    return text
+
+
 # =====================================================================
 # MODALS INTERATIVOS COM COMPONENTE NATIVO DE UPLOAD (LABEL TIPO 18 + FILE UPLOAD TIPO 19)
 # =====================================================================
@@ -688,7 +702,7 @@ class CriarCategoriaButton(discord.ui.Button):
 
 
 class RemoverCategoriaButton(discord.ui.Button):
-    """Botão vermelho Remover categoria (sem ação por enquanto)."""
+    """Botão vermelho Remover categoria (abre painel com select menu das categorias existentes)."""
     def __init__(self, guild_id: int, user_id: int):
         super().__init__(
             label="Remover categoria",
@@ -701,8 +715,13 @@ class RemoverCategoriaButton(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        logger.info(f"Botão Remover categoria clicado por {interaction.user} (sem ação por enquanto)")
-        await interaction.response.defer()
+        logger.info(f"Botão Remover categoria clicado por {interaction.user} (abrindo painel de remoção)")
+        await render_remove_category_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
 
 
 class EditarCategoriaButton(discord.ui.Button):
@@ -831,6 +850,88 @@ class VoltarParaAparenciaButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         logger.info(f"Voltar clicado por {interaction.user} no painel de cores")
         await render_appearance_panel(interaction, self.guild_id or (interaction.guild_id or 0), self.user_id or interaction.user.id, is_edit=True)
+
+
+class RemoverCategoriaSelect(discord.ui.Select):
+    """Select Menu contendo apenas as categorias existentes para remoção."""
+    def __init__(self, guild_id: int, user_id: int, categorias: List[Dict[str, Any]]):
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+        emoji_folder = resolve_partial_emoji("folder", "📁")
+        options = []
+        for idx, cat in enumerate(categorias[:25]):
+            nome = (cat.get("nome") or f"Categoria {idx + 1}").strip()[:100]
+            desc_raw = (cat.get("descricao") or "").strip()
+            desc = desc_raw[:100] if desc_raw else None
+            val = str(cat.get("id") or f"idx_{idx}")[:100]
+            options.append(
+                discord.SelectOption(
+                    label=nome,
+                    value=val,
+                    description=desc,
+                    emoji=emoji_folder
+                )
+            )
+
+        super().__init__(
+            placeholder="Selecione a categoria para remover...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="select_remover_categoria"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_id = self.values[0]
+        gid = str(self.guild_id or interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid)
+        categorias = cfg.get("categorias_ticket", [])
+
+        novas_categorias = []
+        removida_nome = selected_id
+        removed = False
+        for idx, cat in enumerate(categorias):
+            cat_val = str(cat.get("id") or f"idx_{idx}")
+            if not removed and cat_val == selected_id:
+                removida_nome = cat.get("nome") or selected_id
+                removed = True
+                continue
+            novas_categorias.append(cat)
+
+        cfg["categorias_ticket"] = novas_categorias
+        await CloudStorage.save_guild_config(gid, cfg)
+        logger.info(f"Categoria '{removida_nome}' removida por {interaction.user} na guilda {gid}")
+
+        await render_categories_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
+
+
+class VoltarParaCategoriasButton(discord.ui.Button):
+    """Botão Voltar do painel de remoção de categoria: sempre azul na última linha separada."""
+    def __init__(self, guild_id: int, user_id: int):
+        super().__init__(
+            label="Voltar",
+            emoji=resolve_partial_emoji("back", "⬅️"),
+            style=discord.ButtonStyle.primary,
+            custom_id="btn_remover_categoria_voltar",
+            row=1
+        )
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        logger.info(f"Botão Voltar clicado por {interaction.user} no painel de remover categoria")
+        await render_categories_panel(
+            interaction,
+            self.guild_id or (interaction.guild_id or 0),
+            self.user_id or interaction.user.id,
+            is_edit=True
+        )
 
 
 # =====================================================================
@@ -1100,6 +1201,53 @@ def build_v2_categories_layout(guild_id: int, user_id: int):
         return None
 
 
+def build_v2_remove_category_layout(guild_id: int, user_id: int):
+    """
+    Constrói a árvore de LayoutView com Container para o painel de Remover categoria.
+    Contém apenas as categorias existentes no Select Menu + botão Voltar azul na última linha.
+    """
+    if not HAS_COMPONENTS_V2:
+        return None
+
+    try:
+        gid_str = str(guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+        categorias = cfg.get("categorias_ticket", [])
+        text = format_remove_category_panel_text(has_categories=bool(categorias))
+
+        layout_view = discord.ui.LayoutView(timeout=None)
+
+        separator_spacing = getattr(discord, "SeparatorSpacing", None)
+        spacing_arg = separator_spacing.small if separator_spacing else None
+        separator = discord.ui.Separator(visible=True) if spacing_arg is None else discord.ui.Separator(visible=True, spacing=spacing_arg)
+
+        row_voltar = discord.ui.ActionRow(VoltarParaCategoriasButton(guild_id, user_id))
+
+        if categorias:
+            row_select = discord.ui.ActionRow(RemoverCategoriaSelect(guild_id, user_id, categorias))
+            container = discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                separator,
+                row_select,
+                row_voltar,
+                accent_colour=cor_embed
+            )
+        else:
+            container = discord.ui.Container(
+                discord.ui.TextDisplay(text),
+                separator,
+                row_voltar,
+                accent_colour=cor_embed
+            )
+
+        layout_view.add_item(container)
+        return layout_view
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar LayoutView v2 de remover categoria: {e}")
+        return None
+
+
 # =====================================================================
 # RENDERIZADORES COMPATÍVEIS (V2 PRIMARY COM FALLBACK AUTOMÁTICO)
 # =====================================================================
@@ -1258,6 +1406,40 @@ async def render_categories_panel(interaction: discord.Interaction, guild_id: in
     view.add_item(RemoverCategoriaButton(guild_id, user_id))
     view.add_item(EditarCategoriaButton(guild_id, user_id))
     view.add_item(VoltarParaSistemaButton(guild_id, user_id))
+
+    if is_edit:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def render_remove_category_panel(interaction: discord.Interaction, guild_id: int, user_id: int, is_edit: bool = True):
+    """Renderiza o painel de Remover categoria com Select Menu apenas das categorias existentes."""
+    v2_view = build_v2_remove_category_layout(guild_id, user_id)
+    if v2_view is not None:
+        try:
+            if is_edit:
+                await interaction.response.edit_message(view=v2_view)
+            else:
+                await interaction.response.send_message(view=v2_view, ephemeral=True)
+            logger.info("Painel de remover categoria enviado com Componentes V2 (Container)")
+            return
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar LayoutView v2 de remover categoria: {e}. Usando fallback.")
+
+    gid_str = str(guild_id or "direct")
+    cfg = CloudStorage.get_guild_config(gid_str)
+    cor_embed = cfg.get("painel", {}).get("cor") or config.EMBED_COLOR_DEFAULT
+    categorias = cfg.get("categorias_ticket", [])
+    text = format_remove_category_panel_text(has_categories=bool(categorias))
+    embed = discord.Embed(description=text, color=cor_embed)
+    view = discord.ui.View(timeout=None)
+    if categorias:
+        view.add_item(RemoverCategoriaSelect(guild_id, user_id, categorias))
+    view.add_item(VoltarParaCategoriasButton(guild_id, user_id))
 
     if is_edit:
         if not interaction.response.is_done():
