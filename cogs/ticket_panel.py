@@ -2311,16 +2311,27 @@ def build_v2_ticket_welcome_layout(
         return None
 
 
+async def _reply_ephemeral_status(interaction: discord.Interaction, message: str) -> None:
+    """Atualiza a mensagem efêmera inicial ('Criando ticket...') ou envia followup se necessário."""
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(content=message)
+        else:
+            await interaction.response.send_message(content=message, ephemeral=True)
+    except Exception:
+        try:
+            await interaction.followup.send(content=message, ephemeral=True)
+        except Exception:
+            pass
+
+
 async def handle_public_category_selection(interaction: discord.Interaction, selected_id: str, guild_id: int = 0) -> None:
-    """Processa a seleção de categoria no painel público, cria o tópico privado e responde efêmero."""
+    """Processa a seleção de categoria no painel público, mostra ':reload: Criando ticket...', cria o tópico privado e edita a mensagem."""
     if interaction.id in _handled_public_interactions:
         return
     _handled_public_interactions.append(interaction.id)
     if len(_handled_public_interactions) > 200:
         del _handled_public_interactions[:100]
-
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True)
 
     gid_int = guild_id or (interaction.guild_id or 0)
     gid_str = str(gid_int or "direct")
@@ -2335,11 +2346,15 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
             break
 
     if categoria_alvo is None:
-        await interaction.followup.send(
-            "Esta categoria não está mais disponível no painel.",
+        await _reply_ephemeral_status(interaction, "Esta categoria não está mais disponível no painel.")
+        return
+
+    emoji_reload = EmojiManager.get("reload", fallback="<:reload:1561908806584115210>")
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            content=f"{emoji_reload} Criando ticket...",
             ephemeral=True
         )
-        return
 
     cat_nome = (categoria_alvo.get("nome") or "Atendimento").strip()
     canal_topicos_id = categoria_alvo.get("canal_topicos_id")
@@ -2361,9 +2376,9 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
         target_channel = interaction.channel
 
     if target_channel is None or not hasattr(target_channel, "create_thread"):
-        await interaction.followup.send(
-            "❌ Canal de tópicos não configurado ou inválido para esta categoria.",
-            ephemeral=True
+        await _reply_ephemeral_status(
+            interaction,
+            "❌ Canal de tópicos não configurado ou inválido para esta categoria."
         )
         return
 
@@ -2378,16 +2393,16 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
             reason=f"Ticket aberto por {interaction.user} ({cat_nome})"
         )
     except discord.Forbidden:
-        await interaction.followup.send(
-            f"❌ Não tenho permissão para criar tópicos privados em {target_channel.mention}.",
-            ephemeral=True
+        await _reply_ephemeral_status(
+            interaction,
+            f"❌ Não tenho permissão para criar tópicos privados em {target_channel.mention}."
         )
         return
     except Exception as e:
         logger.error(f"Erro ao criar tópico privado de ticket: {e}", exc_info=True)
-        await interaction.followup.send(
-            f"❌ Não foi possível criar o tópico do ticket: {e}",
-            ephemeral=True
+        await _reply_ephemeral_status(
+            interaction,
+            f"❌ Não foi possível criar o tópico do ticket: {e}"
         )
         return
 
@@ -2465,9 +2480,9 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
         f"Ticket aberto por {interaction.user} na categoria '{cat_nome}' -> tópico {thread.name} ({thread.id}) na guilda {gid_str}"
     )
 
-    await interaction.followup.send(
-        content=f"{emoji_correto} Seu ticket foi criado com sucesso!\n{emoji_ban} {thread.mention}",
-        ephemeral=True
+    await _reply_ephemeral_status(
+        interaction,
+        f"{emoji_correto} Seu ticket foi criado com sucesso!\n{emoji_ban} {thread.mention}"
     )
 
 
