@@ -1127,7 +1127,7 @@ class CriarCategoriaButton(discord.ui.Button):
         allowed_roles = _get_allowed_category_role_ids(str(gid_int or "direct"), guild=interaction.guild)
         if not allowed_roles:
             await interaction.response.send_message(
-                "⚠️ Nenhum **Cargo Permitido** foi configurado ainda! "
+                f"{EmojiManager.get('warn')} Nenhum **Cargo Permitido** foi configurado ainda! "
                 "Vá em `/configurações` → **Cargos** e selecione os **Cargos Permitidos** primeiro.",
                 ephemeral=True
             )
@@ -1417,7 +1417,7 @@ class EditarCategoriaSelect(discord.ui.Select):
         allowed_roles = _get_allowed_category_role_ids(str(gid_int or "direct"), guild=interaction.guild)
         if not allowed_roles:
             await interaction.response.send_message(
-                "⚠️ Nenhum **Cargo Permitido** foi configurado ainda! "
+                f"{EmojiManager.get('warn')} Nenhum **Cargo Permitido** foi configurado ainda! "
                 "Vá em `/configurações` → **Cargos** e selecione os **Cargos Permitidos** primeiro.",
                 ephemeral=True
             )
@@ -2467,7 +2467,7 @@ class PuxarMembroUserSelect(discord.ui.UserSelect):
                 thread = interaction.channel
 
         if thread is None or not hasattr(thread, "add_user"):
-            await interaction.edit_original_response(content="❌ Não foi possível acessar este tópico.")
+            await interaction.edit_original_response(content=f"{EmojiManager.get('wrong')} Não foi possível acessar este tópico.")
             return
 
         added_mentions: List[str] = []
@@ -2494,9 +2494,9 @@ class PuxarMembroUserSelect(discord.ui.UserSelect):
             except Exception:
                 pass
         if failed_names:
-            result_lines.append(f"⚠️ Não foi possível adicionar: {', '.join(failed_names)}")
+            result_lines.append(f"{EmojiManager.get('warn')} Não foi possível adicionar: {', '.join(failed_names)}")
 
-        final_msg = "\n".join(result_lines) or "❌ Nenhum membro foi adicionado."
+        final_msg = "\n".join(result_lines) or f"{EmojiManager.get('wrong')} Nenhum membro foi adicionado."
         if HAS_COMPONENTS_V2:
             try:
                 done_view = discord.ui.LayoutView(timeout=None)
@@ -2563,7 +2563,7 @@ class RenomearTicketModal(discord.ui.Modal, title="Renomear Ticket"):
     async def on_submit(self, interaction: discord.Interaction):
         novo_nome = (self.novo_nome_input.value or "").strip()[:100]
         if not novo_nome:
-            await interaction.response.send_message("❌ Informe um nome válido para o tópico.", ephemeral=True)
+            await interaction.response.send_message(f"{EmojiManager.get('wrong')} Informe um nome válido para o tópico.", ephemeral=True)
             return
 
         if not interaction.response.is_done():
@@ -2577,16 +2577,16 @@ class RenomearTicketModal(discord.ui.Modal, title="Renomear Ticket"):
                 thread = interaction.channel
 
         if thread is None or not hasattr(thread, "edit"):
-            await interaction.followup.send("❌ Não foi possível acessar o tópico.", ephemeral=True)
+            await interaction.followup.send(f"{EmojiManager.get('wrong')} Não foi possível acessar o tópico.", ephemeral=True)
             return
 
         try:
             await thread.edit(name=novo_nome, reason=f"Ticket renomeado por {interaction.user}")
         except discord.Forbidden:
-            await interaction.followup.send("❌ Não tenho permissão para renomear este tópico.", ephemeral=True)
+            await interaction.followup.send(f"{EmojiManager.get('wrong')} Não tenho permissão para renomear este tópico.", ephemeral=True)
             return
         except discord.HTTPException as e:
-            await interaction.followup.send(f"❌ Não foi possível renomear o tópico agora: {e}", ephemeral=True)
+            await interaction.followup.send(f"{EmojiManager.get('wrong')} Não foi possível renomear o tópico agora: {e}", ephemeral=True)
             return
 
         emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
@@ -2677,7 +2677,7 @@ async def handle_ticket_notify_staff(
     if not isinstance(ticket_data, dict):
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
                 ephemeral=True
             )
         return
@@ -2686,7 +2686,7 @@ async def handle_ticket_notify_staff(
     if str(interaction.user.id) != owner_id:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "❌ Apenas quem abriu este ticket pode usar o botão **Notificar equipe**.",
+                f"{EmojiManager.get('wrong')} Apenas quem abriu este ticket pode usar o botão **Notificar equipe**.",
                 ephemeral=True
             )
         return
@@ -2698,7 +2698,7 @@ async def handle_ticket_notify_staff(
     if not allowed_ids:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "⚠️ Nenhum cargo de equipe configurado para notificar neste ticket.",
+                f"{EmojiManager.get('warn')} Nenhum cargo de equipe configurado para notificar neste ticket.",
                 ephemeral=True
             )
         return
@@ -2714,7 +2714,7 @@ async def handle_ticket_notify_staff(
             thread = interaction.channel
 
     if thread is None:
-        await interaction.followup.send("❌ Não foi possível acessar este tópico.", ephemeral=True)
+        await interaction.followup.send(f"{EmojiManager.get('wrong')} Não foi possível acessar este tópico.", ephemeral=True)
         return
 
     roles_mention = " ".join(f"<@&{rid}>" for rid in allowed_ids)
@@ -2737,7 +2737,7 @@ async def handle_ticket_notify_staff(
             await thread.send(content=notify_msg, allowed_mentions=allowed_mentions)
     except Exception as e:
         logger.warning(f"Erro ao notificar equipe no tópico {tid_int}: {e}")
-        await interaction.followup.send(f"❌ Erro ao notificar a equipe: {e}", ephemeral=True)
+        await interaction.followup.send(f"{EmojiManager.get('wrong')} Erro ao notificar a equipe: {e}", ephemeral=True)
         return
 
     await interaction.followup.send(
@@ -2768,7 +2768,7 @@ async def handle_ticket_leave_opener(
     if not isinstance(ticket_data, dict):
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
                 ephemeral=True
             )
         return
@@ -2777,7 +2777,7 @@ async def handle_ticket_leave_opener(
     if str(interaction.user.id) != owner_id:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "❌ Apenas quem abriu este ticket pode usar o botão **Sair do atendimento**.",
+                f"{EmojiManager.get('wrong')} Apenas quem abriu este ticket pode usar o botão **Sair do atendimento**.",
                 ephemeral=True
             )
         return
@@ -2791,7 +2791,7 @@ async def handle_ticket_leave_opener(
 
     if thread is None or not hasattr(thread, "remove_user"):
         if not interaction.response.is_done():
-            await interaction.response.send_message("❌ Não foi possível acessar este tópico.", ephemeral=True)
+            await interaction.response.send_message(f"{EmojiManager.get('wrong')} Não foi possível acessar este tópico.", ephemeral=True)
         return
 
     emoji_back = EmojiManager.get("back", fallback="🚪")
@@ -2825,7 +2825,7 @@ async def handle_ticket_leave_opener(
     except discord.Forbidden:
         try:
             await interaction.followup.send(
-                "❌ Não tenho permissão para remover você deste tópico.",
+                f"{EmojiManager.get('wrong')} Não tenho permissão para remover você deste tópico.",
                 ephemeral=True
             )
         except Exception:
@@ -2859,7 +2859,7 @@ async def handle_ticket_panel_action(
     if not isinstance(ticket_data, dict):
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "⚠️ Os dados deste ticket não foram encontrados no sistema.",
+                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
                 ephemeral=True
             )
         return
@@ -2880,7 +2880,7 @@ async def handle_ticket_panel_action(
     if not has_allowed_role and not is_admin:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "❌ Apenas membros com cargo permitido podem usar as opções deste ticket.",
+                f"{EmojiManager.get('wrong')} Apenas membros com cargo permitido podem usar as opções deste ticket.",
                 ephemeral=True
             )
         asyncio.create_task(
@@ -2894,7 +2894,7 @@ async def handle_ticket_panel_action(
         if assumed_by_id:
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    f"⚠️ Este ticket já foi assumido por <@{assumed_by_id}>.",
+                    f"{EmojiManager.get('warn')} Este ticket já foi assumido por <@{assumed_by_id}>.",
                     ephemeral=True
                 )
             asyncio.create_task(
@@ -2989,7 +2989,7 @@ async def handle_ticket_panel_action(
     if not assumed_by_id:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "⚠️ Você precisa **Assumir** o ticket primeiro para poder usar as demais opções.",
+                f"{EmojiManager.get('warn')} Você precisa **Assumir** o ticket primeiro para poder usar as demais opções.",
                 ephemeral=True
             )
         asyncio.create_task(
@@ -3000,7 +3000,7 @@ async def handle_ticket_panel_action(
     if str(interaction.user.id) != str(assumed_by_id):
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                f"⚠️ Apenas <@{assumed_by_id}> (quem assumiu este ticket) pode usar as demais opções.",
+                f"{EmojiManager.get('warn')} Apenas <@{assumed_by_id}> (quem assumiu este ticket) pode usar as demais opções.",
                 ephemeral=True
             )
         asyncio.create_task(
@@ -3174,7 +3174,7 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
     if target_channel is None or not hasattr(target_channel, "create_thread"):
         await _reply_ephemeral_status(
             interaction,
-            "❌ Canal de tópicos não configurado ou inválido para esta categoria."
+            f"{EmojiManager.get('wrong')} Canal de tópicos não configurado ou inválido para esta categoria."
         )
         return
 
@@ -3191,14 +3191,14 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
     except discord.Forbidden:
         await _reply_ephemeral_status(
             interaction,
-            f"❌ Não tenho permissão para criar tópicos privados em {target_channel.mention}."
+            f"{EmojiManager.get('wrong')} Não tenho permissão para criar tópicos privados em {target_channel.mention}."
         )
         return
     except Exception as e:
         logger.error(f"Erro ao criar tópico privado de ticket: {e}", exc_info=True)
         await _reply_ephemeral_status(
             interaction,
-            f"❌ Não foi possível criar o tópico do ticket: {e}"
+            f"{EmojiManager.get('wrong')} Não foi possível criar o tópico do ticket: {e}"
         )
         return
 
@@ -3572,7 +3572,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                 gid_int,
                 self.user_id or interaction.user.id,
                 is_edit=True,
-                status_msg="⚠️ Nenhuma categoria foi configurada ainda. Crie pelo menos uma categoria em `/painel` → **Configurações do sistema** → **Categorias**."
+                status_msg=f"{EmojiManager.get('warn')} Nenhuma categoria foi configurada ainda. Crie pelo menos uma categoria em `/painel` → **Configurações do sistema** → **Categorias**."
             )
             return
 
@@ -3594,7 +3594,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                     gid_int,
                     self.user_id or interaction.user.id,
                     is_edit=True,
-                    status_msg=f"❌ Não foi possível acessar o canal selecionado: {e}"
+                    status_msg=f"{EmojiManager.get('wrong')} Não foi possível acessar o canal selecionado: {e}"
                 )
                 return
 
@@ -3612,7 +3612,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                     gid_int,
                     self.user_id or interaction.user.id,
                     is_edit=True,
-                    status_msg=f"❌ Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
+                    status_msg=f"{EmojiManager.get('wrong')} Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
                 )
                 return
             except Exception as e:
@@ -3628,7 +3628,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                     gid_int,
                     self.user_id or interaction.user.id,
                     is_edit=True,
-                    status_msg=f"❌ Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
+                    status_msg=f"{EmojiManager.get('wrong')} Não tenho permissão para enviar mensagens no canal {target_channel.mention}."
                 )
                 return
             except Exception as e:
@@ -3637,7 +3637,7 @@ class SetPainelChannelSelect(discord.ui.ChannelSelect):
                     gid_int,
                     self.user_id or interaction.user.id,
                     is_edit=True,
-                    status_msg=f"❌ Erro ao enviar o painel no canal {target_channel.mention}: {e}"
+                    status_msg=f"{EmojiManager.get('wrong')} Erro ao enviar o painel no canal {target_channel.mention}: {e}"
                 )
                 return
 
