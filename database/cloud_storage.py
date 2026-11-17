@@ -31,6 +31,7 @@ class CloudStorage:
     _hf_sync_task: Optional[asyncio.Task] = None
     _hf_poll_task: Optional[asyncio.Task] = None
     _dirty_guilds: set = set()
+    _closed_tickets: Dict[str, set] = {}
     _last_remote_hash: Optional[str] = None
 
     @classmethod
@@ -292,7 +293,7 @@ class CloudStorage:
     async def _hf_background_poll(cls) -> None:
         """Mantém o cache em memória sincronizado com o HF Dataset caso outra instância salve alterações."""
         while True:
-            await asyncio.sleep(20)
+            await asyncio.sleep(5)
             if cls._hf_dirty or cls._hf_worker_running or cls._dirty_guilds:
                 continue
             try:
@@ -375,6 +376,14 @@ class CloudStorage:
                                 gid_str = str(gid)
                                 if gid_str not in dirty_batch and gid_str not in cls._dirty_guilds:
                                     cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
+                                elif gid_str in cls._guilds_data and isinstance(cfg, dict):
+                                    remote_tickets = cfg.get("tickets_ativos") or {}
+                                    local_tickets = cls._guilds_data[gid_str].setdefault("tickets_ativos", {})
+                                    closed_set = cls._closed_tickets.get(gid_str, set())
+                                    if isinstance(remote_tickets, dict):
+                                        for rtid, rtdata in remote_tickets.items():
+                                            if rtid not in local_tickets and rtid not in closed_set and isinstance(rtdata, dict):
+                                                local_tickets[rtid] = rtdata
                     except Exception:
                         pass
                     payload_bytes = cls._build_hf_commit_payload()
@@ -401,6 +410,38 @@ class CloudStorage:
             cls._hf_sync_task = None
             if cls._hf_dirty:
                 cls._trigger_hf_sync()
+
+    @classmethod
+    def mark_ticket_closed(cls, guild_id: str, thread_id: str) -> None:
+        """Registra ticket fechado para evitar que merge remoto entre réplicas o restaure."""
+        cls._closed_tickets.setdefault(str(guild_id), set()).add(str(thread_id))
+
+    @classmethod
+    async def force_refresh_from_hf(cls) -> bool:
+        """Força leitura imediata do Hugging Face Dataset para sincronizar estado entre réplicas."""
+        if not config.HF_DB_TOKEN or not config.HF_DB_REPO:
+            return False
+        try:
+            timeout = aiohttp.ClientTimeout(total=3)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                remote_data = await cls._fetch_hf_remote_dict(session)
+                if isinstance(remote_data, dict):
+                    for gid, cfg in remote_data.items():
+                        gid_str = str(gid)
+                        if gid_str not in cls._dirty_guilds:
+                            cls._guilds_data[gid_str] = cls._merge_defaults(gid_str, cfg)
+                        elif gid_str in cls._guilds_data and isinstance(cfg, dict):
+                            remote_tickets = cfg.get("tickets_ativos") or {}
+                            local_tickets = cls._guilds_data[gid_str].setdefault("tickets_ativos", {})
+                            closed_set = cls._closed_tickets.get(gid_str, set())
+                            if isinstance(remote_tickets, dict):
+                                for rtid, rtdata in remote_tickets.items():
+                                    if rtid not in local_tickets and rtid not in closed_set and isinstance(rtdata, dict):
+                                        local_tickets[rtid] = rtdata
+                    return True
+        except Exception as e:
+            logger.debug(f"Aviso ao atualizar estado remoto do HF Dataset: {e}")
+        return False
 
     @classmethod
     async def flush(cls) -> None:

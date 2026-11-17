@@ -2948,6 +2948,150 @@ async def _reset_ticket_panel_select(
         logger.debug(f"Aviso ao resetar Select Menu do ticket {thread_id}: {e}")
 
 
+def _is_unknown_interaction(exc: Exception) -> bool:
+    """Retorna True se a exceção for 10062 Unknown interaction (outra réplica respondeu antes)."""
+    return isinstance(exc, discord.NotFound) and getattr(exc, "code", None) == 10062
+
+
+def _extract_text_from_message(msg: Optional[discord.Message]) -> str:
+    """Extrai todo o texto de um painel de ticket (Components V2 TextDisplay ou Embed description)."""
+    if msg is None:
+        return ""
+    texts: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if node is None:
+            return
+        if isinstance(node, dict):
+            c = node.get("content")
+            if isinstance(c, str) and c.strip():
+                texts.append(c)
+            if "component" in node:
+                _walk(node.get("component"))
+            for child in (node.get("components") or []):
+                _walk(child)
+            return
+        c = getattr(node, "content", None)
+        if isinstance(c, str) and c.strip():
+            texts.append(c)
+        if hasattr(node, "component"):
+            _walk(getattr(node, "component", None))
+        for attr in ("children", "components"):
+            sub = getattr(node, attr, None)
+            if sub:
+                for child in sub:
+                    _walk(child)
+
+    for comp in (getattr(msg, "components", None) or []):
+        _walk(comp)
+    for emb in (getattr(msg, "embeds", None) or []):
+        desc = getattr(emb, "description", None)
+        if isinstance(desc, str) and desc.strip():
+            texts.append(desc)
+    return "\n".join(texts)
+
+
+def _recover_ticket_from_message(
+    msg: Optional[discord.Message],
+    channel: Any,
+    cfg: Dict[str, Any],
+    tid_int: int,
+) -> Optional[Dict[str, Any]]:
+    """Reconstrói os dados do ticket em 0ms a partir do painel enviado no tópico caso falte no cache local."""
+    full_text = _extract_text_from_message(msg)
+    if not full_text:
+        return None
+
+    m_owner = re.search(r"Dono do ticket:\s*<@!?(\d+)>", full_text)
+    if not m_owner:
+        m_owner = re.search(r"—\s*<@!?(\d+)>", full_text)
+    if not m_owner:
+        return None
+
+    owner_id = m_owner.group(1)
+    m_att = re.search(r"Atendente:\s*<@!?(\d+)>", full_text)
+    assumed_by_id = m_att.group(1) if m_att else None
+
+    m_cat = re.search(r"##\s+(?:<a?:[a-zA-Z0-9_]+:\d+>\s*)?(.+?)\s+—\s+<@!?\d+>", full_text)
+    cat_nome = m_cat.group(1).strip() if m_cat else "Atendimento"
+
+    m_data = re.search(r"Data de criação:\s*(\d{2}/\d{2}/\d{4})", full_text)
+    data_criacao = m_data.group(1) if m_data else "--/--/----"
+
+    m_hora = re.search(r"Horário de criação:\s*(\d{2}:\d{2})", full_text)
+    horario_criacao = m_hora.group(1) if m_hora else "--:--"
+
+    category_id = ""
+    allowed_role_ids: List[str] = []
+    for cat in (cfg.get("categorias_ticket") or []):
+        if (cat.get("nome") or "").strip().lower() == cat_nome.lower():
+            category_id = str(cat.get("id") or "")
+            allowed_role_ids = [str(r) for r in (cat.get("cargos_permitidos_ids") or []) if str(r).isdigit()]
+            break
+    if not allowed_role_ids:
+        allowed_role_ids = [str(r) for r in (cfg.get("cargos", {}).get("cargos_permitidos_ids") or []) if str(r).isdigit()]
+
+    created_ts: Optional[int] = None
+    ch_created = getattr(channel, "created_at", None)
+    if ch_created is not None:
+        try:
+            created_ts = int(ch_created.timestamp())
+        except Exception:
+            created_ts = None
+
+    reconstructed: Dict[str, Any] = {
+        "thread_id": str(tid_int),
+        "thread_name": getattr(channel, "name", None) or f"ticket-{tid_int}",
+        "message_id": str(getattr(msg, "id", "")) if msg is not None else None,
+        "owner_id": str(owner_id),
+        "category_id": category_id,
+        "category_name": cat_nome,
+        "allowed_role_ids": allowed_role_ids,
+        "assumed_by_id": assumed_by_id,
+        "data_criacao": data_criacao,
+        "horario_criacao": horario_criacao,
+        "created_at_ts": created_ts,
+        "added_members": [],
+        "renamed_history": [],
+        "opener_left": False,
+    }
+    tickets_ativos = cfg.setdefault("tickets_ativos", {})
+    tickets_ativos[str(tid_int)] = reconstructed
+    logger.info(f"Dados do ticket {tid_int} reconstruídos automaticamente a partir da mensagem do painel.")
+    return reconstructed
+
+
+async def _get_or_recover_ticket_data(
+    interaction: discord.Interaction,
+    cfg: Dict[str, Any],
+    tid_int: int,
+    allow_cloud_fetch: bool = True,
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Busca dados do ticket no cache local, na mensagem do painel (0ms) ou no Hugging Face Dataset."""
+    tid_str = str(tid_int)
+    tickets_ativos = cfg.setdefault("tickets_ativos", {})
+    ticket_data = tickets_ativos.get(tid_str)
+    if isinstance(ticket_data, dict):
+        return cfg, ticket_data
+
+    # 1. Tenta reconstrução instantânea (0ms) pela mensagem do painel que originou a interação
+    recovered = _recover_ticket_from_message(interaction.message, interaction.channel, cfg, tid_int)
+    if isinstance(recovered, dict):
+        return cfg, recovered
+
+    # 2. Fallback: força atualização imediata a partir do HF Dataset (caso outra réplica tenha salvo)
+    if allow_cloud_fetch:
+        await CloudStorage.force_refresh_from_hf()
+        gid_str = str(interaction.guild_id or "direct")
+        cfg = CloudStorage.get_guild_config(gid_str)
+        tickets_ativos = cfg.setdefault("tickets_ativos", {})
+        ticket_data = tickets_ativos.get(tid_str)
+        if isinstance(ticket_data, dict):
+            return cfg, ticket_data
+
+    return cfg, None
+
+
 _handled_ticket_action_interactions: List[int] = []
 
 
@@ -2969,22 +3113,28 @@ async def handle_ticket_notify_staff(
     tid_str = str(tid_int)
 
     cfg = CloudStorage.get_guild_config(gid_str)
-    ticket_data = cfg.get("tickets_ativos", {}).get(tid_str)
+    cfg, ticket_data = await _get_or_recover_ticket_data(interaction, cfg, tid_int, allow_cloud_fetch=True)
     if not isinstance(ticket_data, dict):
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Os dados deste ticket não foram encontrados no sistema.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     owner_id = str(ticket_data.get("owner_id") or "")
     if str(interaction.user.id) != owner_id:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('wrong')} Apenas quem abriu este ticket pode usar o botão **Notificar equipe**.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('wrong')} Apenas quem abriu este ticket pode usar o botão **Notificar equipe**.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     allowed_ids = [str(r) for r in (ticket_data.get("allowed_role_ids") or []) if str(r).isdigit()]
@@ -2992,15 +3142,23 @@ async def handle_ticket_notify_staff(
         allowed_ids = [str(r) for r in (cfg.get("cargos", {}).get("cargos_permitidos_ids") or []) if str(r).isdigit()]
 
     if not allowed_ids:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Nenhum cargo de equipe configurado para notificar neste ticket.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Nenhum cargo de equipe configurado para notificar neste ticket.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound as e:
+            if _is_unknown_interaction(e):
+                return
+            raise
 
     thread = interaction.channel
     if thread is None or getattr(thread, "id", 0) != tid_int:
@@ -3060,22 +3218,28 @@ async def handle_ticket_leave_opener(
     tid_str = str(tid_int)
 
     cfg = CloudStorage.get_guild_config(gid_str)
-    ticket_data = cfg.get("tickets_ativos", {}).get(tid_str)
+    cfg, ticket_data = await _get_or_recover_ticket_data(interaction, cfg, tid_int, allow_cloud_fetch=True)
     if not isinstance(ticket_data, dict):
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Os dados deste ticket não foram encontrados no sistema.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     owner_id = str(ticket_data.get("owner_id") or "")
     if str(interaction.user.id) != owner_id:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('wrong')} Apenas quem abriu este ticket pode usar o botão **Sair do atendimento**.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('wrong')} Apenas quem abriu este ticket pode usar o botão **Sair do atendimento**.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     thread = interaction.channel
@@ -3086,8 +3250,11 @@ async def handle_ticket_leave_opener(
             thread = interaction.channel
 
     if thread is None or not hasattr(thread, "remove_user"):
-        if not interaction.response.is_done():
-            await interaction.response.send_message(f"{EmojiManager.get('wrong')} Não foi possível acessar este tópico.", ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"{_sys_emoji('wrong')} Não foi possível acessar este tópico.", ephemeral=True)
+        except Exception:
+            pass
         return
 
     emoji_back = _sys_emoji("back")
@@ -3096,17 +3263,22 @@ async def handle_ticket_leave_opener(
     app = _get_configured_appearance(painel_cfg)
     accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
 
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.send_message(
+                f"{emoji_back} Você saiu do atendimento.",
+                ephemeral=True
+            )
+        except discord.NotFound as e:
+            if _is_unknown_interaction(e):
+                return
+            raise
+
     brt_tz = timezone(timedelta(hours=-3))
     now_brt = datetime.now(brt_tz)
     ticket_data["opener_left"] = True
     ticket_data["opener_left_at"] = now_brt.strftime("%d/%m/%Y às %H:%M")
     await CloudStorage.save_guild_config(gid_str, cfg)
-
-    if not interaction.response.is_done():
-        await interaction.response.send_message(
-            f"{emoji_back} Você saiu do atendimento.",
-            ephemeral=True
-        )
 
     leave_txt = f"{emoji_member} {interaction.user.mention} saiu do atendimento."
     try:
@@ -3155,15 +3327,24 @@ async def handle_ticket_panel_action(
     tid_str = str(tid_int)
 
     cfg = CloudStorage.get_guild_config(gid_str)
+    # Modal ("renomear") não pode fazer defer nem demorar >3s; para ele, fazemos recuperação em 0ms pela mensagem
+    cfg, ticket_data = await _get_or_recover_ticket_data(
+        interaction,
+        cfg,
+        tid_int,
+        allow_cloud_fetch=(action != "renomear"),
+    )
     tickets_ativos = cfg.setdefault("tickets_ativos", {})
-    ticket_data = tickets_ativos.get(tid_str)
 
     if not isinstance(ticket_data, dict):
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Os dados deste ticket não foram encontrados no sistema.",
-                ephemeral=True
-            )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Os dados deste ticket não foram encontrados no sistema.",
+                    ephemeral=True
+                )
+        except Exception:
+            pass
         return
 
     # Verifica se o usuário possui algum cargo permitido da categoria (ou fallback global) ou é Administrador
@@ -3181,10 +3362,15 @@ async def handle_ticket_panel_action(
 
     if not has_allowed_role and not is_admin:
         if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('wrong')} Apenas membros com cargo permitido podem usar as opções deste ticket.",
-                ephemeral=True
-            )
+            try:
+                await interaction.response.send_message(
+                    f"{_sys_emoji('wrong')} Apenas membros com cargo permitido podem usar as opções deste ticket.",
+                    ephemeral=True
+                )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
         asyncio.create_task(
             _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
         )
@@ -3195,10 +3381,15 @@ async def handle_ticket_panel_action(
     if action == "assumir":
         if assumed_by_id:
             if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{EmojiManager.get('warn')} Este ticket já foi assumido por <@{assumed_by_id}>.",
-                    ephemeral=True
-                )
+                try:
+                    await interaction.response.send_message(
+                        f"{_sys_emoji('warn')} Este ticket já foi assumido por <@{assumed_by_id}>.",
+                        ephemeral=True
+                    )
+                except discord.NotFound as e:
+                    if _is_unknown_interaction(e):
+                        return
+                    raise
             asyncio.create_task(
                 _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
             )
@@ -3208,12 +3399,6 @@ async def handle_ticket_panel_action(
         now_brt = datetime.now(brt_tz)
         data_assumido = now_brt.strftime("%d/%m/%Y")
         horario_assumido = now_brt.strftime("%H:%M")
-
-        ticket_data["assumed_by_id"] = str(interaction.user.id)
-        ticket_data["assumed_at_ts"] = int(now_brt.timestamp())
-        ticket_data["data_assumido"] = data_assumido
-        ticket_data["horario_assumido"] = horario_assumido
-        await CloudStorage.save_guild_config(gid_str, cfg)
 
         owner_id = ticket_data.get("owner_id")
         user_mention = f"<@{owner_id}>" if owner_id else "Membro"
@@ -3233,27 +3418,38 @@ async def handle_ticket_panel_action(
             guild_id=gid_int,
         )
         if not interaction.response.is_done():
-            if updated_v2 is not None:
-                await interaction.response.edit_message(
-                    view=updated_v2,
-                    allowed_mentions=discord.AllowedMentions(users=True, roles=False)
-                )
-            else:
-                fallback_txt = format_ticket_welcome_text(
-                    user_mention=user_mention,
-                    cat_nome=cat_nome,
-                    atendente_text=atendente_text,
-                    data_criacao=data_criacao,
-                    horario_criacao=horario_criacao,
-                )
-                fb_view = discord.ui.View(timeout=None)
-                fb_view.add_item(TicketControlSelect(thread_id=tid_int, guild_id=gid_int))
-                fb_view.add_item(NotificarEquipeButton(thread_id=tid_int, guild_id=gid_int))
-                fb_view.add_item(SairAtendimentoButton(thread_id=tid_int, guild_id=gid_int))
-                await interaction.response.edit_message(
-                    embed=discord.Embed(description=fallback_txt, color=accent_color),
-                    view=fb_view
-                )
+            try:
+                if updated_v2 is not None:
+                    await interaction.response.edit_message(
+                        view=updated_v2,
+                        allowed_mentions=discord.AllowedMentions(users=True, roles=False)
+                    )
+                else:
+                    fallback_txt = format_ticket_welcome_text(
+                        user_mention=user_mention,
+                        cat_nome=cat_nome,
+                        atendente_text=atendente_text,
+                        data_criacao=data_criacao,
+                        horario_criacao=horario_criacao,
+                    )
+                    fb_view = discord.ui.View(timeout=None)
+                    fb_view.add_item(TicketControlSelect(thread_id=tid_int, guild_id=gid_int))
+                    fb_view.add_item(NotificarEquipeButton(thread_id=tid_int, guild_id=gid_int))
+                    fb_view.add_item(SairAtendimentoButton(thread_id=tid_int, guild_id=gid_int))
+                    await interaction.response.edit_message(
+                        embed=discord.Embed(description=fallback_txt, color=accent_color),
+                        view=fb_view
+                    )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
+
+        ticket_data["assumed_by_id"] = str(interaction.user.id)
+        ticket_data["assumed_at_ts"] = int(now_brt.timestamp())
+        ticket_data["data_assumido"] = data_assumido
+        ticket_data["horario_assumido"] = horario_assumido
+        await CloudStorage.save_guild_config(gid_str, cfg)
 
         emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
         if EmojiManager.needs_remote_resolve(emoji_correto, guild=interaction.guild):
@@ -3298,10 +3494,15 @@ async def handle_ticket_panel_action(
     # Demais opções (fechar, puxar_membro, renomear) só podem ser usadas após assumir o ticket
     if not assumed_by_id:
         if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Você precisa **Assumir** o ticket primeiro para poder usar as demais opções.",
-                ephemeral=True
-            )
+            try:
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Você precisa **Assumir** o ticket primeiro para poder usar as demais opções.",
+                    ephemeral=True
+                )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
         asyncio.create_task(
             _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
         )
@@ -3309,10 +3510,15 @@ async def handle_ticket_panel_action(
 
     if str(interaction.user.id) != str(assumed_by_id):
         if not interaction.response.is_done():
-            await interaction.response.send_message(
-                f"{EmojiManager.get('warn')} Apenas <@{assumed_by_id}> (quem assumiu este ticket) pode usar as demais opções.",
-                ephemeral=True
-            )
+            try:
+                await interaction.response.send_message(
+                    f"{_sys_emoji('warn')} Apenas <@{assumed_by_id}> (quem assumiu este ticket) pode usar as demais opções.",
+                    ephemeral=True
+                )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
         asyncio.create_task(
             _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
         )
@@ -3321,16 +3527,21 @@ async def handle_ticket_panel_action(
     if action == "puxar_membro":
         puxar_v2 = build_v2_puxar_membro_layout(tid_int, gid_int, accent_color)
         if not interaction.response.is_done():
-            if puxar_v2 is not None:
-                await interaction.response.send_message(view=puxar_v2, ephemeral=True)
-            else:
-                fb_view = discord.ui.View(timeout=180)
-                fb_view.add_item(PuxarMembroUserSelect(tid_int, gid_int, accent_color))
-                await interaction.response.send_message(
-                    "Selecione o(s) membro(s) para puxar para este tópico:",
-                    view=fb_view,
-                    ephemeral=True
-                )
+            try:
+                if puxar_v2 is not None:
+                    await interaction.response.send_message(view=puxar_v2, ephemeral=True)
+                else:
+                    fb_view = discord.ui.View(timeout=180)
+                    fb_view.add_item(PuxarMembroUserSelect(tid_int, gid_int, accent_color))
+                    await interaction.response.send_message(
+                        "Selecione o(s) membro(s) para puxar para este tópico:",
+                        view=fb_view,
+                        ephemeral=True
+                    )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
         asyncio.create_task(
             _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
         )
@@ -3339,9 +3550,14 @@ async def handle_ticket_panel_action(
     if action == "renomear":
         current_name = getattr(interaction.channel, "name", "") or ""
         if not interaction.response.is_done():
-            await interaction.response.send_modal(
-                RenomearTicketModal(tid_int, gid_int, current_name=current_name, accent_color=accent_color)
-            )
+            try:
+                await interaction.response.send_modal(
+                    RenomearTicketModal(tid_int, gid_int, current_name=current_name, accent_color=accent_color)
+                )
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
         asyncio.create_task(
             _reset_ticket_panel_select(interaction.message, ticket_data, accent_color, gid_int, tid_int)
         )
@@ -3349,7 +3565,12 @@ async def handle_ticket_panel_action(
 
     if action == "fechar":
         if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except discord.NotFound as e:
+                if _is_unknown_interaction(e):
+                    return
+                raise
 
         thread = interaction.channel
         if thread is None or getattr(thread, "id", 0) != tid_int:
@@ -3419,6 +3640,7 @@ async def handle_ticket_panel_action(
             transcript_filename=transcript_filename,
         )
 
+        CloudStorage.mark_ticket_closed(gid_str, tid_str)
         tickets_ativos.pop(tid_str, None)
         await CloudStorage.save_guild_config(gid_str, cfg)
 
@@ -3490,10 +3712,16 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
 
     emoji_reload = EmojiManager.get("reload", fallback="<:reload:1561908806584115210>")
     if not interaction.response.is_done():
-        await interaction.response.send_message(
-            content=f"{emoji_reload} Criando ticket...",
-            ephemeral=True
-        )
+        try:
+            await interaction.response.send_message(
+                content=f"{emoji_reload} Criando ticket...",
+                ephemeral=True
+            )
+        except discord.NotFound as e:
+            if _is_unknown_interaction(e):
+                logger.info(f"Interação de abertura {interaction.id} já tratada por outra instância; ignorando.")
+                return
+            raise
 
     cat_nome = (categoria_alvo.get("nome") or "Atendimento").strip()
     canal_topicos_id = categoria_alvo.get("canal_topicos_id")
