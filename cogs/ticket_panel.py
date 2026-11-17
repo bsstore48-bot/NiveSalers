@@ -5,11 +5,12 @@ modais com suporte nativo a componentes de upload de arquivo.
 """
 
 import asyncio
+import io
 import logging
 import re
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -132,15 +133,264 @@ def _get_dias_horario(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             dias[k] = {"ativo": False, "inicio": None, "fim": None}
     return dias
 
-def resolve_partial_emoji(emoji_key: str, default_unicode: str = "⚙️"):
+def _sys_emoji(emoji_key: str, default_key: str = "information") -> str:
+    """Retorna sempre um emoji personalizado do sistema de Application Emojis (nunca Unicode)."""
+    raw = EmojiManager.get(emoji_key)
+    if raw and raw.startswith("<") and raw.endswith(">"):
+        return raw
+    fallback_raw = EmojiManager.get(default_key)
+    if fallback_raw and fallback_raw.startswith("<") and fallback_raw.endswith(">"):
+        return fallback_raw
+    pinfo = config.PRIORITY_EMOJIS.get(emoji_key) or config.PRIORITY_EMOJIS.get(default_key) or {}
+    return pinfo.get("tag", "")
+
+
+def resolve_partial_emoji(emoji_key: str, default_unicode: Optional[str] = "⚙️"):
     """Converte tag de emoji em discord.PartialEmoji ou string Unicode de forma segura."""
     raw = EmojiManager.get(emoji_key, fallback=default_unicode)
-    if raw.startswith("<") and raw.endswith(">"):
+    if raw and raw.startswith("<") and raw.endswith(">"):
         try:
             return discord.PartialEmoji.from_str(raw)
         except Exception:
-            return default_unicode
-    return raw
+            return default_unicode or None
+    return raw or default_unicode or None
+
+
+def _format_ticket_duration(
+    created_at_ts: Optional[int],
+    data_criacao: str = "",
+    horario_criacao: str = "",
+    now_brt: Optional[datetime] = None,
+) -> str:
+    """Calcula duração legível entre abertura e fechamento do ticket."""
+    brt_tz = timezone(timedelta(hours=-3))
+    end_dt = now_brt or datetime.now(brt_tz)
+    start_dt: Optional[datetime] = None
+    if isinstance(created_at_ts, (int, float)) and created_at_ts > 0:
+        start_dt = datetime.fromtimestamp(created_at_ts, tz=brt_tz)
+    elif data_criacao and horario_criacao:
+        try:
+            start_dt = datetime.strptime(f"{data_criacao} {horario_criacao}", "%d/%m/%Y %H:%M").replace(tzinfo=brt_tz)
+        except Exception:
+            start_dt = None
+    if start_dt is None:
+        return "Indisponível"
+    total_secs = max(0, int((end_dt - start_dt).total_seconds()))
+    if total_secs < 60:
+        return f"{total_secs}s"
+    mins, secs = divmod(total_secs, 60)
+    hours, mins = divmod(mins, 60)
+    days, hours = divmod(hours, 24)
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if mins:
+        parts.append(f"{mins}min")
+    if not days and not hours and secs:
+        parts.append(f"{secs}s")
+    return " ".join(parts) if parts else "0s"
+
+
+async def _resolve_log_channel(guild, client, cfg: Dict[str, Any], log_key: str) -> Optional[Any]:
+    """Resolve o canal configurado para um tipo específico de log (com fallback para canal_logs_id legado)."""
+    logs_cfg = cfg.get("logs", {})
+    raw_id = logs_cfg.get(log_key) or logs_cfg.get("canal_logs_id")
+    if not raw_id or not str(raw_id).isdigit():
+        return None
+    ch_id = int(raw_id)
+    ch = None
+    if guild is not None:
+        if hasattr(guild, "get_channel_or_thread"):
+            ch = guild.get_channel_or_thread(ch_id)
+        if ch is None:
+            ch = guild.get_channel(ch_id)
+    if ch is None and client is not None:
+        ch = client.get_channel(ch_id)
+    if ch is None and client is not None:
+        try:
+            ch = await client.fetch_channel(ch_id)
+        except Exception as e:
+            logger.warning(f"Não foi possível buscar canal de log {ch_id} ({log_key}): {e}")
+            return None
+    return ch
+
+
+async def _build_ticket_transcript(
+    thread,
+    ticket_data: Dict[str, Any],
+    closed_by,
+    guild,
+    closed_at_brt: datetime,
+    duracao_str: str,
+) -> Tuple[Optional[bytes], str, int]:
+    """Coleta as mensagens do tópico antes do encerramento e gera um transcript .txt em UTF-8."""
+    tid = getattr(thread, "id", 0)
+    filename = f"transcript-{tid}.txt"
+    brt_tz = timezone(timedelta(hours=-3))
+    lines: List[str] = []
+    msg_count = 0
+
+    if thread is not None and hasattr(thread, "history"):
+        try:
+            async for msg in thread.history(limit=500, oldest_first=True):
+                msg_count += 1
+                created_brt = msg.created_at.astimezone(brt_tz)
+                ts_str = created_brt.strftime("%d/%m/%Y %H:%M:%S")
+                author_tag = f"{msg.author} ({msg.author.id})"
+                content = (msg.content or "").strip()
+                extras: List[str] = []
+                for att in getattr(msg, "attachments", []):
+                    extras.append(f"[Anexo: {att.filename} - {att.url}]")
+                if getattr(msg, "embeds", None):
+                    for emb in msg.embeds:
+                        emb_txt = " | ".join(p for p in [emb.title, emb.description] if p)
+                        if emb_txt:
+                            extras.append(f"[Embed: {emb_txt[:200]}]")
+                if not content and not extras:
+                    if getattr(msg, "components", None):
+                        extras.append("[Painel / Componentes V2]")
+                    else:
+                        extras.append("[Mensagem sem conteúdo de texto]")
+                body = " ".join(p for p in [content, *extras] if p)
+                lines.append(f"[{ts_str}] {author_tag}: {body}")
+        except Exception as e:
+            logger.warning(f"Aviso ao gerar transcript do tópico {tid}: {e}")
+            lines.append(f"[Aviso] Não foi possível ler todas as mensagens: {e}")
+
+    owner_id = ticket_data.get("owner_id")
+    assumed_by_id = ticket_data.get("assumed_by_id")
+    cat_nome = ticket_data.get("category_name") or "Atendimento"
+    thread_name = getattr(thread, "name", None) or ticket_data.get("thread_name") or f"ticket-{tid}"
+    data_criacao = ticket_data.get("data_criacao") or "--/--/----"
+    horario_criacao = ticket_data.get("horario_criacao") or "--:--"
+    guild_name = getattr(guild, "name", "Servidor") if guild else "Servidor"
+
+    header = [
+        "=" * 60,
+        f"TRANSCRIPT DE ATENDIMENTO - {guild_name}",
+        "=" * 60,
+        f"Tópico: {thread_name} (ID: {tid})",
+        f"Categoria: {cat_nome}",
+        f"Dono do ticket: {owner_id or 'Desconhecido'}",
+        f"Atendente: {assumed_by_id or 'Não assumido'}",
+        f"Fechado por: {closed_by} ({getattr(closed_by, 'id', '')})",
+        f"Abertura: {data_criacao} às {horario_criacao} (BRT)",
+        f"Fechamento: {closed_at_brt.strftime('%d/%m/%Y às %H:%M:%S')} (BRT)",
+        f"Duração: {duracao_str}",
+        f"Total de mensagens: {msg_count}",
+    ]
+    added_members = ticket_data.get("added_members") or []
+    if added_members:
+        header.append(f"Membros adicionados: {', '.join(str(m) for m in added_members)}")
+    renamed_history = ticket_data.get("renamed_history") or []
+    if renamed_history:
+        ren_fmt = "; ".join(f"{r.get('de', '?')} -> {r.get('para', '?')}" for r in renamed_history if isinstance(r, dict))
+        if ren_fmt:
+            header.append(f"Renomeações: {ren_fmt}")
+    if ticket_data.get("opener_left"):
+        header.append(f"Saída do autor: Sim ({ticket_data.get('opener_left_at') or 'registrado'})")
+    header.extend(["=" * 60, ""])
+
+    full_text = "\n".join(header + (lines if lines else ["(Nenhuma mensagem registrada neste tópico.)"]))
+    return full_text.encode("utf-8"), filename, msg_count
+
+
+async def _send_ticket_log(
+    *,
+    guild,
+    client,
+    cfg: Dict[str, Any],
+    log_key: str,
+    title: str,
+    title_emoji_key: str,
+    lines: List[str],
+    accent_color: int,
+    jump_url: Optional[str] = None,
+    transcript_bytes: Optional[bytes] = None,
+    transcript_filename: Optional[str] = None,
+) -> bool:
+    """Envia log padronizado em Components V2 para o canal configurado em /configurações -> Canais."""
+    log_ch = await _resolve_log_channel(guild, client, cfg, log_key)
+    if log_ch is None:
+        return False
+
+    emoji_title = _sys_emoji(title_emoji_key, "bot")
+    log_text = f"## {emoji_title} {title}\n\n" + "\n".join(lines)
+    no_pings = discord.AllowedMentions.none()
+
+    if HAS_COMPONENTS_V2:
+        try:
+            separator_spacing = getattr(discord, "SeparatorSpacing", None)
+            spacing_arg = separator_spacing.small if separator_spacing else None
+            def _make_sep():
+                return (
+                    discord.ui.Separator(visible=True)
+                    if spacing_arg is None
+                    else discord.ui.Separator(visible=True, spacing=spacing_arg)
+                )
+
+            container_items: List[Any] = [discord.ui.TextDisplay(log_text)]
+            has_file_comp = bool(transcript_bytes and transcript_filename and hasattr(discord.ui, "File"))
+            if has_file_comp:
+                container_items.append(_make_sep())
+                container_items.append(discord.ui.File(f"attachment://{transcript_filename}"))
+            if jump_url:
+                if not has_file_comp:
+                    container_items.append(_make_sep())
+                link_emoji = resolve_partial_emoji("link", None)
+                btn_kwargs: Dict[str, Any] = {
+                    "label": "Ir para o ticket",
+                    "style": discord.ButtonStyle.link,
+                    "url": jump_url,
+                }
+                if link_emoji is not None:
+                    btn_kwargs["emoji"] = link_emoji
+                container_items.append(discord.ui.ActionRow(discord.ui.Button(**btn_kwargs)))
+
+            log_view = discord.ui.LayoutView(timeout=None)
+            log_view.add_item(discord.ui.Container(*container_items, accent_colour=accent_color))
+
+            send_kwargs: Dict[str, Any] = {"view": log_view, "allowed_mentions": no_pings}
+            if has_file_comp and transcript_bytes and transcript_filename:
+                send_kwargs["file"] = discord.File(io.BytesIO(transcript_bytes), filename=transcript_filename)
+
+            await log_ch.send(**send_kwargs)
+            return True
+        except Exception as e:
+            logger.warning(f"Aviso ao enviar log V2 ({log_key}): {e}. Tentando fallback seguro.")
+            if transcript_bytes and transcript_filename:
+                try:
+                    fallback_v2_items: List[Any] = [discord.ui.TextDisplay(log_text)]
+                    if jump_url:
+                        fallback_v2_items.append(
+                            discord.ui.ActionRow(
+                                discord.ui.Button(label="Ir para o ticket", style=discord.ButtonStyle.link, url=jump_url)
+                            )
+                        )
+                    fb_v2 = discord.ui.LayoutView(timeout=None)
+                    fb_v2.add_item(discord.ui.Container(*fallback_v2_items, accent_colour=accent_color))
+                    await log_ch.send(view=fb_v2, allowed_mentions=no_pings)
+                    await log_ch.send(file=discord.File(io.BytesIO(transcript_bytes), filename=transcript_filename))
+                    return True
+                except Exception as e2:
+                    logger.warning(f"Aviso no fallback V2 com arquivo ({log_key}): {e2}")
+
+    try:
+        emb = discord.Embed(description=log_text, color=accent_color)
+        fb_kwargs: Dict[str, Any] = {"embed": emb, "allowed_mentions": no_pings}
+        if jump_url:
+            fb_view = discord.ui.View(timeout=None)
+            fb_view.add_item(discord.ui.Button(label="Ir para o ticket", style=discord.ButtonStyle.link, url=jump_url))
+            fb_kwargs["view"] = fb_view
+        if transcript_bytes and transcript_filename:
+            fb_kwargs["file"] = discord.File(io.BytesIO(transcript_bytes), filename=transcript_filename)
+        await log_ch.send(**fb_kwargs)
+        return True
+    except Exception as e:
+        logger.warning(f"Erro ao enviar log ({log_key}) para canal {getattr(log_ch, 'id', '?')}: {e}")
+        return False
 
 
 def resolve_category_emoji(raw_emoji: Optional[str], fallback_key: str = "folder", fallback_unicode: str = "📁", guild=None):
@@ -2359,7 +2609,7 @@ class NotificarEquipeButton(discord.ui.Button):
     def __init__(self, thread_id: int, guild_id: int):
         super().__init__(
             label="Notificar equipe",
-            emoji=resolve_partial_emoji("announcement", "📢"),
+            emoji=resolve_partial_emoji("announcement", None),
             style=discord.ButtonStyle.secondary,
             custom_id="btn_ticket_notificar_equipe",
             row=1,
@@ -2380,7 +2630,7 @@ class SairAtendimentoButton(discord.ui.Button):
     def __init__(self, thread_id: int, guild_id: int):
         super().__init__(
             label="Sair do atendimento",
-            emoji=resolve_partial_emoji("back", "🚪"),
+            emoji=resolve_partial_emoji("back", None),
             style=discord.ButtonStyle.danger,
             custom_id="btn_ticket_sair_atendimento",
             row=1,
@@ -2471,30 +2721,48 @@ class PuxarMembroUserSelect(discord.ui.UserSelect):
             return
 
         added_mentions: List[str] = []
+        added_ids_log: List[str] = []
         failed_names: List[str] = []
         for user_obj in self.values:
             try:
                 await thread.add_user(user_obj)
                 added_mentions.append(user_obj.mention)
+                added_ids_log.append(f"{user_obj} ({user_obj.id})")
             except Exception as e:
                 logger.warning(f"Erro ao puxar {user_obj} para o tópico {self.thread_id}: {e}")
                 failed_names.append(getattr(user_obj, "display_name", str(user_obj)))
 
-        emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
-        emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+        if added_ids_log:
+            gid_str = str(self.guild_id or interaction.guild_id or "direct")
+            cfg_p = CloudStorage.get_guild_config(gid_str)
+            t_data = cfg_p.get("tickets_ativos", {}).get(str(self.thread_id))
+            if isinstance(t_data, dict):
+                prev_added = t_data.setdefault("added_members", [])
+                for entry in added_ids_log:
+                    if entry not in prev_added:
+                        prev_added.append(entry)
+                await CloudStorage.save_guild_config(gid_str, cfg_p)
+
+        emoji_correto = _sys_emoji("correto")
+        emoji_member = _sys_emoji("member")
+        emoji_warn = _sys_emoji("warn")
         result_lines: List[str] = []
         if added_mentions:
             result_lines.append(
                 f"{emoji_correto} Membro(s) adicionado(s) ao tópico: {', '.join(added_mentions)}"
             )
+            notice_txt = f"{emoji_member} {', '.join(added_mentions)} foi adicionado(a) ao ticket por {interaction.user.mention}."
             try:
-                await thread.send(
-                    f"{emoji_member} {', '.join(added_mentions)} foi adicionado(a) ao ticket por {interaction.user.mention}."
-                )
+                if HAS_COMPONENTS_V2:
+                    n_view = discord.ui.LayoutView(timeout=None)
+                    n_view.add_item(discord.ui.Container(discord.ui.TextDisplay(notice_txt), accent_colour=self.accent_color))
+                    await thread.send(view=n_view)
+                else:
+                    await thread.send(notice_txt)
             except Exception:
                 pass
         if failed_names:
-            result_lines.append(f"{EmojiManager.get('warn')} Não foi possível adicionar: {', '.join(failed_names)}")
+            result_lines.append(f"{emoji_warn} Não foi possível adicionar: {', '.join(failed_names)}")
 
         final_msg = "\n".join(result_lines) or f"{EmojiManager.get('wrong')} Nenhum membro foi adicionado."
         if HAS_COMPONENTS_V2:
@@ -2580,16 +2848,44 @@ class RenomearTicketModal(discord.ui.Modal, title="Renomear Ticket"):
             await interaction.followup.send(f"{EmojiManager.get('wrong')} Não foi possível acessar o tópico.", ephemeral=True)
             return
 
+        old_name = getattr(thread, "name", "") or f"ticket-{self.thread_id}"
         try:
             await thread.edit(name=novo_nome, reason=f"Ticket renomeado por {interaction.user}")
         except discord.Forbidden:
-            await interaction.followup.send(f"{EmojiManager.get('wrong')} Não tenho permissão para renomear este tópico.", ephemeral=True)
+            await interaction.followup.send(f"{_sys_emoji('wrong')} Não tenho permissão para renomear este tópico.", ephemeral=True)
             return
         except discord.HTTPException as e:
-            await interaction.followup.send(f"{EmojiManager.get('wrong')} Não foi possível renomear o tópico agora: {e}", ephemeral=True)
+            await interaction.followup.send(f"{_sys_emoji('wrong')} Não foi possível renomear o tópico agora: {e}", ephemeral=True)
             return
 
-        emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+        gid_str = str(self.guild_id or interaction.guild_id or "direct")
+        cfg_r = CloudStorage.get_guild_config(gid_str)
+        t_data = cfg_r.get("tickets_ativos", {}).get(str(self.thread_id))
+        if isinstance(t_data, dict):
+            brt_tz = timezone(timedelta(hours=-3))
+            now_brt = datetime.now(brt_tz)
+            t_data["thread_name"] = novo_nome
+            t_data.setdefault("renamed_history", []).append({
+                "de": old_name,
+                "para": novo_nome,
+                "por": str(interaction.user.id),
+                "em": now_brt.strftime("%d/%m/%Y às %H:%M"),
+            })
+            await CloudStorage.save_guild_config(gid_str, cfg_r)
+
+        emoji_edit = _sys_emoji("edit")
+        thread_notice = f"{emoji_edit} O tópico foi renomeado para **{novo_nome}** por {interaction.user.mention}."
+        try:
+            if HAS_COMPONENTS_V2:
+                ren_view = discord.ui.LayoutView(timeout=None)
+                ren_view.add_item(discord.ui.Container(discord.ui.TextDisplay(thread_notice), accent_colour=self.accent_color))
+                await thread.send(view=ren_view, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await thread.send(thread_notice, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            pass
+
+        emoji_correto = _sys_emoji("correto")
         msg_txt = f"{emoji_correto} Tópico renomeado para **{novo_nome}**!"
         if HAS_COMPONENTS_V2:
             try:
@@ -2718,8 +3014,8 @@ async def handle_ticket_notify_staff(
         return
 
     roles_mention = " ".join(f"<@&{rid}>" for rid in allowed_ids)
-    emoji_announcement = EmojiManager.get("announcement", fallback="📢")
-    emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
+    emoji_announcement = _sys_emoji("announcement")
+    emoji_correto = _sys_emoji("correto")
     painel_cfg = cfg.get("painel", {})
     app = _get_configured_appearance(painel_cfg)
     accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
@@ -2794,11 +3090,17 @@ async def handle_ticket_leave_opener(
             await interaction.response.send_message(f"{EmojiManager.get('wrong')} Não foi possível acessar este tópico.", ephemeral=True)
         return
 
-    emoji_back = EmojiManager.get("back", fallback="🚪")
-    emoji_member = EmojiManager.get("member", fallback="<:member:1561907903688876064>")
+    emoji_back = _sys_emoji("back")
+    emoji_member = _sys_emoji("member")
     painel_cfg = cfg.get("painel", {})
     app = _get_configured_appearance(painel_cfg)
     accent_color = app["cor"] if app["cor"] is not None else config.EMBED_COLOR_DEFAULT
+
+    brt_tz = timezone(timedelta(hours=-3))
+    now_brt = datetime.now(brt_tz)
+    ticket_data["opener_left"] = True
+    ticket_data["opener_left_at"] = now_brt.strftime("%d/%m/%Y às %H:%M")
+    await CloudStorage.save_guild_config(gid_str, cfg)
 
     if not interaction.response.is_done():
         await interaction.response.send_message(
@@ -2902,7 +3204,15 @@ async def handle_ticket_panel_action(
             )
             return
 
+        brt_tz = timezone(timedelta(hours=-3))
+        now_brt = datetime.now(brt_tz)
+        data_assumido = now_brt.strftime("%d/%m/%Y")
+        horario_assumido = now_brt.strftime("%H:%M")
+
         ticket_data["assumed_by_id"] = str(interaction.user.id)
+        ticket_data["assumed_at_ts"] = int(now_brt.timestamp())
+        ticket_data["data_assumido"] = data_assumido
+        ticket_data["horario_assumido"] = horario_assumido
         await CloudStorage.save_guild_config(gid_str, cfg)
 
         owner_id = ticket_data.get("owner_id")
@@ -2956,33 +3266,33 @@ async def handle_ticket_panel_action(
         )
 
         # Log em Canal Logs de tickets assumidos se configurado
-        canal_assumidos_id = cfg.get("logs", {}).get("canal_assumidos_id")
-        if canal_assumidos_id and str(canal_assumidos_id).isdigit():
+        thread_obj = interaction.channel
+        if thread_obj is None or getattr(thread_obj, "id", 0) != tid_int:
             try:
-                log_ch = (
-                    (interaction.guild.get_channel(int(canal_assumidos_id)) if interaction.guild else None)
-                    or interaction.client.get_channel(int(canal_assumidos_id))
-                    or await interaction.client.fetch_channel(int(canal_assumidos_id))
-                )
-                if log_ch is not None:
-                    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
-                    emoji_rocket = EmojiManager.get("rocket", fallback="<:rocket:1561482854133669908>")
-                    thread_ref = f"<#{tid_int}>"
-                    log_text = (
-                        f"## {emoji_bot} Ticket Assumido\n\n"
-                        f"> {emoji_rocket} **Atendente:** {interaction.user.mention} (`{interaction.user.id}`)\n"
-                        f"> **Dono do ticket:** {user_mention}\n"
-                        f"> **Categoria:** {cat_nome}\n"
-                        f"> **Tópico:** {thread_ref}"
-                    )
-                    if HAS_COMPONENTS_V2:
-                        log_view = discord.ui.LayoutView(timeout=None)
-                        log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
-                        await log_ch.send(view=log_view)
-                    else:
-                        await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
-            except Exception as e:
-                logger.warning(f"Aviso ao enviar log de ticket assumido para {canal_assumidos_id}: {e}")
+                thread_obj = await interaction.client.fetch_channel(tid_int)
+            except Exception:
+                thread_obj = interaction.channel
+        thread_ref = getattr(thread_obj, "mention", None) or f"<#{tid_int}>"
+        thread_name_assumido = getattr(thread_obj, "name", None) or ticket_data.get("thread_name") or f"ticket-{tid_int}"
+        owner_log_fmt = f"<@{owner_id}> (`{owner_id}`)" if owner_id else "Membro"
+        await _send_ticket_log(
+            guild=interaction.guild,
+            client=interaction.client,
+            cfg=cfg,
+            log_key="canal_assumidos_id",
+            title="Ticket Assumido",
+            title_emoji_key="rocket",
+            lines=[
+                f"> {_sys_emoji('rocket')} **Atendente:** {interaction.user.mention} (`{interaction.user.id}`)",
+                f"> {_sys_emoji('member')} **Dono do ticket:** {owner_log_fmt}",
+                f"> {_sys_emoji('folder')} **Categoria:** {cat_nome}",
+                f"> {_sys_emoji('ban')} **Tópico:** {thread_ref} (`{thread_name_assumido}`)",
+                f"> {_sys_emoji('calendar')} **Data:** {data_assumido}",
+                f"> {_sys_emoji('clock')} **Horário:** {horario_assumido}",
+            ],
+            accent_color=accent_color,
+            jump_url=getattr(thread_obj, "jump_url", None),
+        )
         return
 
     # Demais opções (fechar, puxar_membro, renomear) só podem ser usadas após assumir o ticket
@@ -3049,50 +3359,83 @@ async def handle_ticket_panel_action(
                 thread = interaction.channel
 
         owner_id = ticket_data.get("owner_id")
-        user_mention = f"<@{owner_id}>" if owner_id else "Membro"
+        owner_log_fmt = f"<@{owner_id}> (`{owner_id}`)" if owner_id else "Membro"
+        atendente_log_fmt = f"<@{assumed_by_id}> (`{assumed_by_id}`)" if assumed_by_id else "Não assumido"
         cat_nome = ticket_data.get("category_name") or "Atendimento"
-        thread_name = getattr(thread, "name", None) or f"ticket-{tid_int}"
+        thread_name = getattr(thread, "name", None) or ticket_data.get("thread_name") or f"ticket-{tid_int}"
+        data_criacao = ticket_data.get("data_criacao") or "--/--/----"
+        horario_criacao = ticket_data.get("horario_criacao") or "--:--"
 
-        # Log em Canal Logs de tickets fechados se configurado
-        canal_fechados_id = cfg.get("logs", {}).get("canal_fechados_id")
-        if canal_fechados_id and str(canal_fechados_id).isdigit():
-            try:
-                log_ch = (
-                    (interaction.guild.get_channel(int(canal_fechados_id)) if interaction.guild else None)
-                    or interaction.client.get_channel(int(canal_fechados_id))
-                    or await interaction.client.fetch_channel(int(canal_fechados_id))
-                )
-                if log_ch is not None:
-                    emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
-                    emoji_lock = EmojiManager.get("lock", fallback="🔒")
-                    log_text = (
-                        f"## {emoji_bot} Ticket Fechado\n\n"
-                        f"> {emoji_lock} **Fechado por:** {interaction.user.mention} (`{interaction.user.id}`)\n"
-                        f"> **Dono do ticket:** {user_mention}\n"
-                        f"> **Atendente:** <@{assumed_by_id}>\n"
-                        f"> **Categoria:** {cat_nome}\n"
-                        f"> **Tópico:** `{thread_name}`"
-                    )
-                    if HAS_COMPONENTS_V2:
-                        log_view = discord.ui.LayoutView(timeout=None)
-                        log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
-                        await log_ch.send(view=log_view)
-                    else:
-                        await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
-            except Exception as e:
-                logger.warning(f"Aviso ao enviar log de ticket fechado para {canal_fechados_id}: {e}")
+        brt_tz = timezone(timedelta(hours=-3))
+        now_brt = datetime.now(brt_tz)
+        data_fechamento = now_brt.strftime("%d/%m/%Y")
+        horario_fechamento = now_brt.strftime("%H:%M")
+        duracao_str = _format_ticket_duration(
+            ticket_data.get("created_at_ts"),
+            data_criacao=data_criacao,
+            horario_criacao=horario_criacao,
+            now_brt=now_brt,
+        )
+
+        transcript_bytes: Optional[bytes] = None
+        transcript_filename: Optional[str] = None
+        msg_count = 0
+        if thread is not None and cfg.get("logs", {}).get("transcripts_ativo", True):
+            transcript_bytes, transcript_filename, msg_count = await _build_ticket_transcript(
+                thread=thread,
+                ticket_data=ticket_data,
+                closed_by=interaction.user,
+                guild=interaction.guild,
+                closed_at_brt=now_brt,
+                duracao_str=duracao_str,
+            )
+
+        close_lines = [
+            f"> {_sys_emoji('lock')} **Fechado por:** {interaction.user.mention} (`{interaction.user.id}`)",
+            f"> {_sys_emoji('member')} **Dono do ticket:** {owner_log_fmt}",
+            f"> {_sys_emoji('rocket')} **Atendente:** {atendente_log_fmt}",
+            f"> {_sys_emoji('folder')} **Categoria:** {cat_nome}",
+            f"> {_sys_emoji('ban')} **Tópico:** `{thread_name}`",
+            f"> {_sys_emoji('calendar')} **Abertura:** {data_criacao} às {horario_criacao}",
+            f"> {_sys_emoji('clock')} **Fechamento:** {data_fechamento} às {horario_fechamento}",
+            f"> {_sys_emoji('time')} **Duração:** {duracao_str}",
+            f"> {_sys_emoji('receipt')} **Mensagens registradas:** {msg_count}",
+        ]
+        if ticket_data.get("opener_left"):
+            close_lines.append(
+                f"> {_sys_emoji('back')} **Autor saiu antes do fechamento:** Sim ({ticket_data.get('opener_left_at') or 'registrado'})"
+            )
+
+        await _send_ticket_log(
+            guild=interaction.guild,
+            client=interaction.client,
+            cfg=cfg,
+            log_key="canal_fechados_id",
+            title="Ticket Fechado",
+            title_emoji_key="lock",
+            lines=close_lines,
+            accent_color=accent_color,
+            transcript_bytes=transcript_bytes,
+            transcript_filename=transcript_filename,
+        )
 
         tickets_ativos.pop(tid_str, None)
         await CloudStorage.save_guild_config(gid_str, cfg)
 
-        emoji_lock = EmojiManager.get("lock", fallback="🔒")
+        emoji_lock = _sys_emoji("lock")
         await interaction.followup.send(
             f"{emoji_lock} Fechando este ticket...",
             ephemeral=True
         )
         if thread is not None:
+            close_notice = f"{emoji_lock} Ticket encerrado por {interaction.user.mention}. O tópico será fechado em 3 segundos..."
             try:
-                await thread.send(f"{emoji_lock} Ticket encerrado por {interaction.user.mention}. O tópico será fechado em 3 segundos...")
+                if HAS_COMPONENTS_V2:
+                    c_view = discord.ui.LayoutView(timeout=None)
+                    c_view.add_item(discord.ui.Container(discord.ui.TextDisplay(close_notice), accent_colour=accent_color))
+                    await thread.send(view=c_view)
+                else:
+                    await thread.send(close_notice)
             except Exception:
                 pass
             await asyncio.sleep(3)
@@ -3257,6 +3600,7 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
     tickets_ativos = cfg.setdefault("tickets_ativos", {})
     tickets_ativos[str(thread.id)] = {
         "thread_id": str(thread.id),
+        "thread_name": thread.name,
         "message_id": str(panel_msg.id) if panel_msg else None,
         "owner_id": str(interaction.user.id),
         "category_id": str(categoria_alvo.get("id") or ""),
@@ -3265,6 +3609,10 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
         "assumed_by_id": None,
         "data_criacao": data_criacao,
         "horario_criacao": horario_criacao,
+        "created_at_ts": int(now_brt.timestamp()),
+        "added_members": [],
+        "renamed_history": [],
+        "opener_left": False,
     }
     await CloudStorage.save_guild_config(gid_str, cfg)
 
@@ -3285,32 +3633,23 @@ async def handle_public_category_selection(interaction: discord.Interaction, sel
                     pass
 
     # Log em Canal Logs de tickets abertos se configurado
-    logs_cfg = cfg.get("logs", {})
-    canal_abertos_id = logs_cfg.get("canal_abertos_id")
-    if canal_abertos_id and str(canal_abertos_id).isdigit():
-        try:
-            log_ch = (
-                (interaction.guild.get_channel(int(canal_abertos_id)) if interaction.guild else None)
-                or interaction.client.get_channel(int(canal_abertos_id))
-                or await interaction.client.fetch_channel(int(canal_abertos_id))
-            )
-            if log_ch is not None:
-                emoji_bot = EmojiManager.get("bot", fallback="<:bot:1557140838285582438>")
-                emoji_info = EmojiManager.get("information", fallback="<:information:1561907852124225599>")
-                log_text = (
-                    f"## {emoji_bot} Ticket Aberto\n\n"
-                    f"> {emoji_info} **Autor:** {interaction.user.mention} (`{interaction.user.id}`)\n"
-                    f"> **Categoria:** {cat_nome}\n"
-                    f"> **Tópico:** {thread.mention}"
-                )
-                if HAS_COMPONENTS_V2:
-                    log_view = discord.ui.LayoutView(timeout=None)
-                    log_view.add_item(discord.ui.Container(discord.ui.TextDisplay(log_text), accent_colour=accent_color))
-                    await log_ch.send(view=log_view)
-                else:
-                    await log_ch.send(embed=discord.Embed(description=log_text, color=accent_color))
-        except Exception as e:
-            logger.warning(f"Aviso ao enviar log de ticket aberto para {canal_abertos_id}: {e}")
+    await _send_ticket_log(
+        guild=interaction.guild,
+        client=interaction.client,
+        cfg=cfg,
+        log_key="canal_abertos_id",
+        title="Ticket Aberto",
+        title_emoji_key="ticket",
+        lines=[
+            f"> {_sys_emoji('member')} **Dono do ticket:** {interaction.user.mention} (`{interaction.user.id}`)",
+            f"> {_sys_emoji('folder')} **Categoria:** {cat_nome}",
+            f"> {_sys_emoji('ban')} **Tópico:** {thread.mention} (`{thread.name}`)",
+            f"> {_sys_emoji('calendar')} **Data de criação:** {data_criacao}",
+            f"> {_sys_emoji('clock')} **Horário de criação:** {horario_criacao}",
+        ],
+        accent_color=accent_color,
+        jump_url=getattr(thread, "jump_url", None),
+    )
 
     # Resolve/clona emojis de confirmação se necessário para exibição garantida
     emoji_correto = EmojiManager.get("correto", fallback="<:correto:1560996992006496367>")
